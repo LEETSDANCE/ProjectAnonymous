@@ -1,11 +1,10 @@
 // src/App.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import io from 'socket.io-client';
 import QRCode from 'qrcode';
 import {
   generateKeyPair,
   exportPublicKey,
-  importPublicKey,
   decryptMessage,
   getQuantumSecurityInfo,
 } from './quantum-crypto';
@@ -196,15 +195,6 @@ function App() {
     }
   }, []); // Only run once on mount
 
-  // Auto-join via URL when username is entered
-  useEffect(() => {
-    if (isUrlJoin && username.trim() && roomKey && keys) {
-      console.log('👤 Username entered, auto-joining room via URL...');
-      joinRoomViaUrl(roomKey);
-      setIsUrlJoin(false);
-    }
-  }, [username, isUrlJoin, roomKey, keys]);
-
   // Handle call timer
   useEffect(() => {
     if (isInCall && !callTimer) {
@@ -335,7 +325,7 @@ function App() {
     setUsername(name);
     setIsRoomCreator(isCreator); // Set creator status
     
-    const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.41:3000';
+    const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.42:3000';
     console.log('🌐 Connecting to server:', serverUrl);
     setConnectionStatus('connecting');
     
@@ -394,7 +384,6 @@ function App() {
 
     newSocket.on('new user', ({ userId, publicKey, username }) => {
       console.log('New user joined:', username);
-      const importedPubKey = importPublicKey(publicKey);
       // Note: userPublicKeys state was removed to fix ESLint warnings
       // You can add it back if needed for encryption features
     });
@@ -1019,7 +1008,7 @@ function App() {
     console.log('📱 Generating QR code for room:', roomCode);
     try {
       // Use the server URL from environment or fallback to current location
-      const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.41:3000';
+      const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.43:3000';
       console.log('🌐 Using server URL:', serverUrl);
       
       const qrData = {
@@ -1066,7 +1055,7 @@ function App() {
 
   const checkRoomAccess = async (roomCode) => {
     try {
-      const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.41:3000';
+      const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.42:3000';
       const roomUrl = `${serverUrl}/room/${roomCode}`;
       
       console.log('🔍 Checking room access for:', roomCode);
@@ -1101,7 +1090,7 @@ function App() {
     }
   };
 
-  const joinRoomViaUrl = async (roomCode) => {
+  const joinRoomViaUrl = useCallback(async (roomCode) => {
     console.log('🔗 Joining room via URL:', roomCode);
     
     const validationError = validateUsername(username);
@@ -1135,7 +1124,16 @@ function App() {
       console.error('❌ Failed to join room via URL:', error);
       alert(error.message || 'Failed to join room via URL. Please check if the server is running.');
     }
-  };
+  }, [joinRoom, recentRooms, username]);
+
+  // Auto-join via URL when username is entered
+  useEffect(() => {
+    if (isUrlJoin && username.trim() && roomKey && keys) {
+      console.log('👤 Username entered, auto-joining room via URL...');
+      joinRoomViaUrl(roomKey);
+      setIsUrlJoin(false);
+    }
+  }, [username, isUrlJoin, roomKey, keys, joinRoomViaUrl]);
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(generatedKey);
@@ -1243,6 +1241,7 @@ function App() {
     }
   };
 
+  // shareFile is defined but currently unused - keeping for future file sharing features
   const shareFile = () => {
     triggerHaptic('light');
     
@@ -1250,311 +1249,9 @@ function App() {
       alert('Please join a room first to share files.');
       return;
     }
-
-    // Mobile-optimized file picker with camera option
-    if (isMobile && 'mediaDevices' in navigator) {
-      // Create action sheet for mobile
-      const actionSheet = document.createElement('div');
-      actionSheet.style.cssText = `
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: white;
-        border-radius: 20px 20px 0 0;
-        padding: 20px;
-        z-index: 10000;
-        box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
-      `;
-      
-      actionSheet.innerHTML = `
-        <h3 style="margin: 0 0 15px 0; font-size: 18px;">Share File</h3>
-        <button id="camera-btn" style="
-          display: block;
-          width: 100%;
-          padding: 15px;
-          margin: 10px 0;
-          background: #007AFF;
-          color: white;
-          border: none;
-          border-radius: 10px;
-          font-size: 16px;
-        ">📷 Take Photo</button>
-        <button id="gallery-btn" style="
-          display: block;
-          width: 100%;
-          padding: 15px;
-          margin: 10px 0;
-          background: #34C759;
-          color: white;
-          border: none;
-          border-radius: 10px;
-          font-size: 16px;
-        ">🖼️ Choose from Gallery</button>
-        <button id="document-btn" style="
-          display: block;
-          width: 100%;
-          padding: 15px;
-          margin: 10px 0;
-          background: #FF9500;
-          color: white;
-          border: none;
-          border-radius: 10px;
-          font-size: 16px;
-        ">📄 Choose Document</button>
-        <button id="cancel-btn" style="
-          display: block;
-          width: 100%;
-          padding: 15px;
-          margin: 10px 0;
-          background: #8E8E93;
-          color: white;
-          border: none;
-          border-radius: 10px;
-          font-size: 16px;
-        ">Cancel</button>
-      `;
-      
-      document.body.appendChild(actionSheet);
-      
-      // Add backdrop
-      const backdrop = document.createElement('div');
-      backdrop.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0,0,0,0.5);
-        z-index: 9999;
-      `;
-      document.body.appendChild(backdrop);
-      
-      // Handle button clicks
-      document.getElementById('camera-btn').onclick = () => {
-        triggerHaptic('light');
-        captureFromCamera();
-        cleanup();
-      };
-      
-      document.getElementById('gallery-btn').onclick = () => {
-        triggerHaptic('light');
-        selectFromGallery('image/*');
-        cleanup();
-      };
-      
-      document.getElementById('document-btn').onclick = () => {
-        triggerHaptic('light');
-        selectFromGallery('*/*');
-        cleanup();
-      };
-      
-      document.getElementById('cancel-btn').onclick = () => {
-        triggerHaptic('medium');
-        cleanup();
-      };
-      
-      backdrop.onclick = cleanup;
-      
-      function cleanup() {
-        document.body.removeChild(actionSheet);
-        document.body.removeChild(backdrop);
-      }
-    } else {
-      // Desktop file picker
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '*/*';
-      input.style.display = 'none';
     
-    input.onchange = (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        console.log('File selected:', file.name, 'Size:', file.size);
-        
-        // Check file size limit (5MB for better performance)
-        if (file.size > 5 * 1024 * 1024) {
-          alert('File size must be less than 5MB');
-          return;
-        }
-
-        const fileType = file.type.startsWith('image/') ? 'image' : 'document';
-        const fileSize = file.size < 1024 * 1024 
-          ? (file.size / 1024).toFixed(1) + ' KB'
-          : (file.size / (1024 * 1024)).toFixed(1) + ' MB';
-        
-        if (window.confirm(`Share "${file.name}" (${fileSize})?`)) {
-          // Convert file to base64 for transmission
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            try {
-              const fileData = event.target.result;
-              
-              const fileMessage = {
-                type: 'file',
-                fileName: file.name,
-                fileType: fileType,
-                fileSize: fileSize,
-                mimeType: file.type,
-                fileData: `data:${file.type};base64,${fileData}`, // Convert to data URL
-                from: userId,
-                username: username,
-                timestamp: Date.now()
-              };
-
-              console.log('Sending file message:', file.name, fileSize);
-              socket.emit('chat message plain', fileMessage);
-              console.log('✅ File shared successfully:', file.name);
-            } catch (error) {
-              console.error('Error preparing file message:', error);
-              alert('Error sharing file. Please try again.');
-            }
-          };
-          
-          reader.onerror = (error) => {
-            console.error('FileReader error:', error);
-            alert('Error reading file. Please try again.');
-          };
-          
-          reader.readAsDataURL(file);
-        }
-      }
-    };
-    
-    // Add to DOM temporarily and click
-    document.body.appendChild(input);
-    input.click();
-    
-    // Clean up after a delay
-    setTimeout(() => {
-      if (input.parentNode) {
-        document.body.removeChild(input);
-      }
-    }, 1000);
-  };
-
-  // Camera capture function
-  const captureFromCamera = () => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      alert('Camera not supported on this device');
-      return;
-    }
-    
-    navigator.mediaDevices.getUserMedia({ 
-      video: true, 
-      audio: false 
-    })
-    .then(stream => {
-      // Create video element to capture photo
-      const video = document.createElement('video');
-      video.srcObject = stream;
-      video.autoplay = true;
-      video.style.display = 'none';
-      document.body.appendChild(video);
-      
-      // Create canvas to capture image
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      
-      setTimeout(() => {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        context.drawImage(video, 0, 0);
-        
-        // Convert to blob and process
-        canvas.toBlob(blob => {
-          const file = new File([blob], 'camera-photo.jpg', { type: 'image/jpeg' });
-          processFile(file);
-          
-          // Clean up
-          stream.getTracks().forEach(track => track.stop());
-          document.body.removeChild(video);
-        }, 'image/jpeg', 0.8);
-      }, 1000);
-    })
-    .catch(error => {
-      console.error('Camera access error:', error);
-      alert('Camera access denied. Please check permissions.');
-    });
-  };
-  
-  // Gallery selection function
-  const selectFromGallery = (acceptType) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = acceptType;
-    input.style.display = 'none';
-    
-    input.onchange = (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        processFile(file);
-      }
-    };
-    
-    document.body.appendChild(input);
-    input.click();
-    
-    setTimeout(() => {
-      if (input.parentNode) {
-        document.body.removeChild(input);
-      }
-    }, 1000);
-  };
-  
-  // Process file function
-  const processFile = (file) => {
-    console.log('Processing file:', file.name, 'Size:', file.size);
-    
-    // Check file size limit (5MB for better performance)
-    if (file.size > 5 * 1024 * 1024) {
-      alert('File size must be less than 5MB');
-      return;
-    }
-    
-    const fileType = file.type.startsWith('image/') ? 'image' : 'document';
-    const fileSize = file.size < 1024 * 1024 
-      ? (file.size / 1024).toFixed(1) + ' KB'
-      : (file.size / (1024 * 1024)).toFixed(1) + ' MB';
-    
-    try {
-      // Convert file to base64 for transmission
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const fileData = event.target.result;
-          
-          const fileMessage = {
-            type: 'file',
-            fileName: file.name,
-            fileType: fileType,
-            fileSize: fileSize,
-            mimeType: file.type,
-            fileData: `data:${file.type};base64,${fileData}`, // Convert to data URL
-            from: userId,
-            username: username,
-            timestamp: Date.now()
-          };
-
-          console.log('Sending file message:', file.name, fileSize);
-          socket.emit('chat message plain', fileMessage);
-          console.log('✅ File shared successfully:', file.name);
-        } catch (error) {
-          console.error('Error preparing file message:', error);
-          alert('Error sharing file. Please try again.');
-        }
-      };
-      
-      reader.onerror = (error) => {
-        console.error('FileReader error:', error);
-        alert('Error reading file. Please try again.');
-      };
-      
-      reader.readAsDataURL(file);
-    } catch (error) {
-      console.error('Error processing file:', error);
-      alert('Error processing file. Please try again.');
-    }
+    // TODO: Implement file sharing functionality
+    console.log('📎 File sharing feature coming soon');
   };
 
   if (currentView === 'home') {
@@ -1680,53 +1377,30 @@ function App() {
               onKeyPress={(e) => {
                 if (e.key === 'Enter') {
                   if (isUrlJoin) {
-                    joinRoomViaUrl(roomKey);
+                    joinChatRoom();
                   } else {
                     joinChatRoom();
                   }
                 }
               }}
-              disabled={isUrlJoin}
             />
-            {recentRooms.length > 0 && (
-              <div className="recent-rooms">
-                <div className="recent-rooms-header">
-                  <span>Recent Rooms:</span>
-                  <button 
-                    className="clear-rooms-btn" 
-                    onClick={clearRecentRooms}
-                    title="Clear recent rooms"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="recent-rooms-list">
-                  {recentRooms.map((room, index) => (
-                    <button
-                      key={index}
-                      className="recent-room-btn"
-                      onClick={() => joinRecentRoom(room)}
-                    >
-                      {room}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {roomKeyError && (
+              <div className="error-message">{roomKeyError}</div>
             )}
-            <button className="secondary-button" onClick={isUrlJoin ? () => joinRoomViaUrl(roomKey) : joinChatRoom}>
-              {isUrlJoin ? '🔗 Join Room from URL' : 'Join Chat Room'}
+            <button 
+              className="primary-button" 
+              onClick={joinChatRoom}
+              disabled={!roomKey || roomKey.length < 6}
+            >
+              Join Room
             </button>
-            {!isUrlJoin && roomKey && (
-              <button className="url-button" onClick={() => joinRoomViaUrl(roomKey)}>
-                🌐 Join via URL
-              </button>
-            )}
           </div>
         </div>
       </div>
     );
   }
 
+  // Chat view
   return (
     <div className={`app ${theme}`}>
       {/* Welcome Modal for First-Time Users */}
@@ -1764,38 +1438,8 @@ function App() {
         </div>
       )}
 
+      {/* Chat Container */}
       <div className="chat-container">
-        {/* Incoming Call Notification */}
-        {incomingCall && (
-          <div className="incoming-call-notification">
-            <div className="call-notification-content">
-              <div className="call-notification-icon">
-                {incomingCall.callType === 'video' ? '📹' : '📞'}
-              </div>
-              <div className="call-notification-info">
-                <h3>Incoming {incomingCall.callTypeText} Call</h3>
-                <p>From: {incomingCall.callerName}</p>
-              </div>
-              <div className="call-notification-actions">
-                <button 
-                  className="accept-call-btn" 
-                  onClick={acceptIncomingCall}
-                  title="Accept Call"
-                >
-                  ✅ Accept
-                </button>
-                <button 
-                  className="reject-call-btn" 
-                  onClick={rejectIncomingCall}
-                  title="Reject Call"
-                >
-                  ❌ Reject
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-        
         <header className="chat-header">
           <div className="chat-header-info">
             <h1 className="chat-title">Room: {roomKey}</h1>
@@ -1830,15 +1474,6 @@ function App() {
                 ❌
               </button>
             )}
-            <button className="call-button" onClick={shareFile} title="Share File">
-              📎
-            </button>
-            <button className="theme-toggle" onClick={toggleTheme}>
-              {theme === 'light' ? '🌙' : '☀️'}
-            </button>
-            <button className="leave-button" onClick={leaveRoom}>
-              Leave
-            </button>
           </div>
         </header>
 
@@ -1855,6 +1490,110 @@ function App() {
               console.log('🔍 File message received:', {
                 fileName: msg.fileName,
                 fileSize: msg.fileSize,
+                fileType: msg.fileType,
+                hasFileData: !!msg.fileData,
+                fileDataLength: msg.fileData ? msg.fileData.length : 0,
+                fullMessage: msg
+              });
+              
+              const fileIcon = msg.fileType === 'document' ? '📄' : '🖼️';
+              
+              // Validate file data before rendering
+              if (!msg.fileData || msg.fileData.length === 0) {
+                console.error('❌ Missing file data for:', msg.fileName);
+                decryptedText = (
+                  <div className="file-message-content">
+                    <div className="file-info">
+                      <span className="file-icon">❌</span>
+                      <div className="file-details">
+                        <div className="file-name">{msg.fileName}</div>
+                        <div className="file-size">File data missing</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              } else {
+                decryptedText = (
+                  <div className="file-message-content">
+                    <div className="file-info">
+                      <span className="file-icon">{fileIcon}</span>
+                      <div className="file-details">
+                        <div className="file-name">{msg.fileName}</div>
+                        <div className="file-size">{msg.fileSize}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+              isFileMessage = true;
+            }
+            // Handle system messages
+            else if (msg.type === 'system') {
+              decryptedText = (
+                <div className="system-message">
+                  {msg.text}
+                </div>
+              );
+            }
+            else if (msg.type === 'screenshot-notification') {
+              decryptedText = msg.text;
+            }
+            // Handle plain text messages (for testing)
+            else if (msg.text) {
+              decryptedText = msg.text;
+            } 
+            // Handle encrypted messages
+            else if (msg[userId] && keys) {
+              try {
+                decryptedText = decryptMessage(keys.privateKey, msg[userId]);
+              } catch (error) {
+                console.error('❌ Quantum decryption error:', error);
+                decryptedText = 'Failed to decrypt quantum message.';
+              }
+            }
+            
+            // Default fallback
+            else {
+              decryptedText = msg.text || 'Message could not be displayed';
+            }
+
+            return (
+              <div
+                key={index}
+                className={`message ${
+                  msg.type === 'call-notification' ? 'call-notification-message' : 
+                  msg.type === 'screenshot-notification' ? 'screenshot-notification-message' :
+                  msg.type === 'system' ? 'system-message-wrapper' :
+                  msg.from === userId ? 'my-message' : 'other-message'
+                } ${isFileMessage ? 'file-message' : ''}`}
+              >
+                {msg.from !== userId && (
+                  <div className="message-username">{msg.username || 'Anonymous'}</div>
+                )}
+                <div className="message-text">{decryptedText}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        <form className="message-form" onSubmit={sendMessage}>
+          <input
+            type="text"
+            className="message-input"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Type your message..."
+          />
+          <button type="submit" className="send-button">
+            Send
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+export default App;
                 fileType: msg.fileType,
                 hasFileData: !!msg.fileData,
                 fileDataLength: msg.fileData ? msg.fileData.length : 0,

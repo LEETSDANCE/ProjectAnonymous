@@ -27,6 +27,7 @@ body.dark {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  padding: 20px;
 }
 
 .app.light {
@@ -2084,22 +2085,11 @@ body.dark {
 }
 
 /* Improved UI Edges */
-.app {
-  border-radius: 20px;
-  overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
-  margin: 20px;
-  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-}
-
-.dark .app {
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-}
 
 .container {
   border-radius: 20px;
   overflow: hidden;
-  padding: 0;
+  padding: 20px;
 }
 
 .header {
