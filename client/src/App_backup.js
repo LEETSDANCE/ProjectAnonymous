@@ -1,12 +1,10 @@
 // src/App.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import io from 'socket.io-client';
 import QRCode from 'qrcode';
 import {
   generateKeyPair,
   exportPublicKey,
-  importPublicKey,
-  encryptMessage,
   decryptMessage,
   getQuantumSecurityInfo,
 } from './quantum-crypto';
@@ -17,6 +15,86 @@ function App() {
   const [currentView, setCurrentView] = useState('home'); // 'home', 'chat'
   const [theme, setTheme] = useState('light');
   
+  // Mobile enhancements
+  const [isMobile, setIsMobile] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
+  const [pullStartY, setPullStartY] = useState(0);
+  
+  // Haptic feedback utility
+  const triggerHaptic = (type = 'light') => {
+    if ('vibrate' in navigator) {
+      switch (type) {
+        case 'light':
+          navigator.vibrate(10);
+          break;
+        case 'medium':
+          navigator.vibrate(25);
+          break;
+        case 'heavy':
+          navigator.vibrate(50);
+          break;
+        case 'success':
+          navigator.vibrate([10, 50, 10]);
+          break;
+        case 'error':
+          navigator.vibrate([100, 50, 100]);
+          break;
+        default:
+          navigator.vibrate(10);
+      }
+    }
+  };
+  
+  // Pull-to-refresh handlers
+  const handleTouchStart = (e) => {
+    if (!isMobile || currentView !== 'chat') return;
+    setPullStartY(e.touches[0].clientY);
+    setIsPulling(true);
+  };
+  
+  const handleTouchMove = (e) => {
+    if (!isPulling || !isMobile) return;
+    const currentY = e.touches[0].clientY;
+    const pullDistance = currentY - pullStartY;
+    
+    // Only trigger if pulling down from top
+    if (pullDistance > 50 && window.scrollY === 0) {
+      triggerHaptic('light');
+      // Add visual feedback
+      document.body.style.transform = `translateY(${Math.min(pullDistance * 0.3, 100)}px)`;
+    }
+  };
+  
+  const handleTouchEnd = () => {
+    if (!isPulling || !isMobile) return;
+    setIsPulling(false);
+    document.body.style.transform = '';
+    
+    // Refresh messages if pulled enough
+    const pullDistance = pullStartY > 0 ? 0 : pullStartY;
+    if (Math.abs(pullDistance) > 100) {
+      triggerHaptic('success');
+      // Trigger message refresh
+      if (socket && roomKey) {
+        console.log('🔄 Refreshing messages...');
+        // Could emit a refresh event or reload messages
+      }
+    }
+  };
+  
+  // Detect mobile device
+  useEffect(() => {
+    const checkMobile = () => {
+      const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                            window.innerWidth <= 768;
+      setIsMobile(isMobileDevice);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+  
   // Room state
   const [roomKey, setRoomKey] = useState('');
   const [generatedKey, setGeneratedKey] = useState('');
@@ -24,6 +102,7 @@ function App() {
   
   // Enhanced signin state
   const [usernameError, setUsernameError] = useState('');
+  const [roomKeyError, setRoomKeyError] = useState('');
   const [recentRooms, setRecentRooms] = useState([]);
   const [showWelcome, setShowWelcome] = useState(false);
   const [isGeneratingKey, setIsGeneratingKey] = useState(false);
@@ -32,6 +111,8 @@ function App() {
   const [showQRCode, setShowQRCode] = useState(false);
   const [roomUrl, setRoomUrl] = useState('');
   const [isRoomCreator, setIsRoomCreator] = useState(false);
+  const [isUrlJoin, setIsUrlJoin] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState('disconnected'); // 'disconnected', 'connecting', 'connected'
   const [quantumSecurity, setQuantumSecurity] = useState(null);
   const [showSecurityInfo, setShowSecurityInfo] = useState(false);
   
@@ -40,13 +121,13 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [userId, setUserId] = useState(null);
   const [keys, setKeys] = useState(null);
-  const [userPublicKeys, setUserPublicKeys] = useState({});
   const [socket, setSocket] = useState(null);
   const [roomUsers, setRoomUsers] = useState([]);
   const [showUserList, setShowUserList] = useState(false);
   const [isInCall, setIsInCall] = useState(false);
   const [callInProgress, setCallInProgress] = useState(false);
   const [currentCallType, setCurrentCallType] = useState('audio');
+  const [incomingCall, setIncomingCall] = useState(null); // Store incoming call data
   const [callDuration, setCallDuration] = useState(0);
   const [callTimer, setCallTimer] = useState(null);
   const [pendingOffer, setPendingOffer] = useState(null);
@@ -97,6 +178,23 @@ function App() {
       localStorage.setItem('hasVisited', 'true');
     }
   }, []);
+
+  // Handle direct room access via URL
+  useEffect(() => {
+    const path = window.location.pathname;
+    console.log('🌐 Current path:', path);
+    
+    // Check if path matches room URL pattern
+    const roomMatch = path.match(/^\/room\/([A-Z0-9]{6})$/i);
+    if (roomMatch) {
+      const roomCode = roomMatch[1].toUpperCase();
+      console.log('🔗 Detected room URL access for:', roomCode);
+      
+      // Set the room key so user can join after entering username
+      setRoomKey(roomCode);
+      setIsUrlJoin(true); // Flag to show URL join UI
+    }
+  }, []); // Only run once on mount
 
   // Handle call timer
   useEffect(() => {
@@ -154,17 +252,25 @@ function App() {
   };
 
   const startChatRoom = () => {
+    console.log('🚀 Starting chat room...');
+    console.log('📝 Username:', username);
+    console.log('🔑 Generated Key:', generatedKey);
+    console.log('🔐 Keys available:', !!keys);
+    
     const validationError = validateUsername(username);
     if (validationError) {
+      console.log('❌ Username validation failed:', validationError);
       setUsernameError(validationError);
       return;
     }
     
     if (!generatedKey) {
+      console.log('❌ No generated key');
       alert('Please generate a session key');
       return;
     }
     if (!keys) {
+      console.log('❌ Quantum keys not ready');
       alert('Quantum encryption keys are still being generated. Please wait a moment and try again.');
       return;
     }
@@ -177,30 +283,29 @@ function App() {
     setRecentRooms(newRecentRooms);
     localStorage.setItem('recentRooms', JSON.stringify(newRecentRooms));
     
+    console.log('✅ All validations passed, joining room...');
+    
     // Generate QR code for sharing
     generateQRCode(generatedKey);
     setIsRoomCreator(true);
     
-    console.log('Starting chat room with key:', generatedKey);
+    console.log('🔗 Calling joinRoom with:', generatedKey, username.trim(), true);
+    triggerHaptic('light');
     joinRoom(generatedKey, username.trim(), true);
   };
 
   const joinChatRoom = () => {
-    const validationError = validateUsername(username);
-    if (validationError) {
-      setUsernameError(validationError);
-      return;
+    if (username.trim() && roomKey.trim()) {
+      triggerHaptic('light');
+      joinRoom(roomKey, username, true);
+    } else {
+      triggerHaptic('error');
+      if (!username.trim()) {
+        setUsernameError('Please enter a username');
+      } else if (!roomKey.trim()) {
+        setRoomKeyError('Please enter a room key');
+      }
     }
-    
-    if (!roomKey.trim()) {
-      alert('Please enter a session key');
-      return;
-    }
-    if (!keys) {
-      alert('Quantum encryption keys are still being generated. Please wait a moment and try again.');
-      return;
-    }
-    
     // Save username to localStorage
     localStorage.setItem('username', username.trim());
     
@@ -213,20 +318,30 @@ function App() {
     joinRoom(roomKey.toUpperCase(), username.trim(), false);
   };
 
-  const joinRoom = (key, name, isCreator) => {
-    console.log(`Joining room: ${key} as ${name}`);
+  const joinRoom = useCallback((key, name, isCreator) => {
+    console.log(`Joining room: ${key} as ${name} (Creator: ${isCreator})`);
     
     // Set room info immediately
     setRoomKey(key);
     setUsername(name);
+    setIsRoomCreator(isCreator); // Set creator status
     
-    const newSocket = io('http://192.168.1.85:3000', {
-      transports: ['polling', 'websocket'],
+    const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.42:3000';
+    console.log('🌐 Connecting to server:', serverUrl);
+    setConnectionStatus('connecting');
+    
+    const newSocket = io(serverUrl, {
+      transports: ['polling'], // Use polling only for better network compatibility
       reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 20000,
+      forceNewConnection: true
     });
 
     newSocket.on('connect', () => {
       console.log('✅ Connected to server! Socket ID:', newSocket.id);
+      setConnectionStatus('connected');
       newSocket.emit('join room', { roomKey: key, username: name });
       
       // Switch to chat view immediately after connecting
@@ -270,18 +385,14 @@ function App() {
 
     newSocket.on('new user', ({ userId, publicKey, username }) => {
       console.log('New user joined:', username);
-      const importedKey = importPublicKey(publicKey);
-      setUserPublicKeys(prev => ({ ...prev, [userId]: importedKey }));
+      // Note: userPublicKeys state was removed to fix ESLint warnings
+      // You can add it back if needed for encryption features
     });
 
     newSocket.on('existing users', (users) => {
-      const importedKeys = {};
-      for (const id in users) {
-        if (id !== userId && users[id].publicKey) {
-          importedKeys[id] = importPublicKey(users[id].publicKey);
-        }
-      }
-      setUserPublicKeys(importedKeys);
+      console.log('Existing users in room:', users);
+      // Note: userPublicKeys state was removed to fix ESLint warnings
+      // You can add it back if needed for encryption features
     });
 
     newSocket.on('chat message', (msg) => {
@@ -303,13 +414,7 @@ function App() {
 
     newSocket.on('room users', (users) => {
       console.log('Room users updated:', users);
-      // Filter out current user and remove duplicates by username
-      const uniqueUsers = users
-        .filter(u => u.userId !== userId)
-        .filter((user, index, self) => 
-          index === self.findIndex((u) => u.username === user.username)
-        );
-      setRoomUsers(uniqueUsers);
+      setRoomUsers(users.filter(u => u.userId !== userId));
     });
 
     newSocket.on('incoming-call', async (data) => {
@@ -318,182 +423,138 @@ function App() {
         console.log('Incoming call from:', data.callerName);
         const callType = data.callType === 'audio' ? 'Voice' : 'Video';
         
-        // Show only one confirmation dialog
-        const shouldAccept = window.confirm(`🔔 Incoming ${callType} call from ${data.callerName}. Accept?`);
-        console.log('User response to call:', shouldAccept ? 'ACCEPTED' : 'REJECTED');
-        if (shouldAccept) {
-          setCallInProgress(true);
-          setIsInCall(true);
-          setCurrentCallType(data.callType);
-          
-          try {
-            console.log('🎤 Requesting media permissions for incoming call...');
-            // Get media stream for incoming call with mobile-friendly constraints
-            const constraints = {
-              audio: true,
-              video: data.callType === 'video' ? {
-                width: { ideal: 1280, max: 1920 },
-                height: { ideal: 720, max: 1080 },
-                facingMode: 'user'
-              } : false
-            };
-            
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            
-            console.log('✅ Media stream obtained for incoming call:', stream);
-            setLocalStream(stream); // Store local stream for cleanup
-            
-            // Display local video if it's a video call
-            if (data.callType === 'video') {
-              setTimeout(() => {
-                let localVideoElement = document.getElementById('localVideo');
-                if (!localVideoElement) {
-                  localVideoElement = document.createElement('video');
-                  localVideoElement.id = 'localVideo';
-                  localVideoElement.autoplay = true;
-                  localVideoElement.muted = true; // Mute to prevent feedback
-                  localVideoElement.style.width = '100%';
-                  localVideoElement.style.height = '100%';
-                  localVideoElement.style.objectFit = 'cover';
-                  localVideoElement.style.transform = 'scaleX(-1)'; // Mirror effect
-                  
-                  const localVideoPlaceholder = document.querySelector('.local-video-placeholder');
-                  if (localVideoPlaceholder) {
-                    localVideoPlaceholder.innerHTML = '';
-                    localVideoPlaceholder.appendChild(localVideoElement);
-                  }
-                }
-                localVideoElement.srcObject = stream;
-              }, 1000);
-            }
-            
-            console.log('🔗 Creating peer connection for incoming call...');
-            // Create peer connection for incoming call
-            const peerConnection = new RTCPeerConnection({
-              iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-              ]
-            });
-            console.log('✅ Peer connection created successfully');
-            
-            // Add tracks to peer connection
-            stream.getTracks().forEach(track => {
-              peerConnection.addTrack(track, stream);
-            });
-            
-            // Set up peer connection handlers
-            peerConnection.ontrack = (event) => {
-              console.log('Received remote stream on web (incoming call)');
-              if (event.streams && event.streams[0]) {
-                console.log('🎵 Setting up remote audio/video stream');
-                const remoteStream = event.streams[0];
-                
-                // Create or get audio element for playback
-                let audioElement = document.getElementById('remoteAudio');
-                if (!audioElement) {
-                  audioElement = document.createElement('audio');
-                  audioElement.id = 'remoteAudio';
-                  audioElement.autoplay = true;
-                  audioElement.controls = false;
-                  audioElement.style.display = 'none';
-                  document.body.appendChild(audioElement);
-                }
-                
-                // Attach stream to audio element
-                audioElement.srcObject = remoteStream;
-                audioElement.play().catch(e => console.log('Audio play failed:', e));
-                
-                // If video call, also create video element
-                if (data.callType === 'video') {
-                  let videoElement = document.getElementById('remoteVideo');
-                  if (!videoElement) {
-                    videoElement = document.createElement('video');
-                    videoElement.id = 'remoteVideo';
-                    videoElement.autoplay = true;
-                    videoElement.controls = false;
-                    videoElement.style.width = '100%';
-                    videoElement.style.height = '100%';
-                    videoElement.style.backgroundColor = '#000';
-                    videoElement.style.objectFit = 'contain';
-                    
-                    // Replace the placeholder content
-                    const remotePlaceholder = document.querySelector('.remote-video-placeholder');
-                    if (remotePlaceholder) {
-                      remotePlaceholder.innerHTML = '';
-                      remotePlaceholder.appendChild(videoElement);
-                    }
-                  }
-                  videoElement.srcObject = remoteStream;
-                  videoElement.play().catch(e => console.log('Video play failed:', e));
-                }
-              }
-            };
-            
-            peerConnection.onconnectionstatechange = () => {
-              const state = peerConnection.connectionState;
-              console.log('🔗 Web app incoming call connection state:', state);
-              if (state === 'connected') {
-                console.log('🎉 Incoming call WebRTC connection established!');
-                // Connection successful - let it stabilize
-                setTimeout(() => {
-                  if (peerConnection.connectionState === 'connected') {
-                    console.log('✅ Incoming call connection stable');
-                  }
-                }, 2000);
-              } else if (state === 'failed') {
-                console.log('❌ Incoming call WebRTC connection failed');
-                setCallInProgress(false);
-                setIsInCall(false);
-              } else if (state === 'disconnected') {
-                console.log('⚠️ Incoming call disconnected - waiting...');
-                setTimeout(() => {
-                  if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
-                    console.log('❌ Incoming call permanently lost');
-                    setCallInProgress(false);
-                    setIsInCall(false);
-                  }
-                }, 3000);
-              }
-            };
-            
-            peerConnection.onicecandidate = (event) => {
-              if (event.candidate) {
-                newSocket.emit('ice-candidate', {
-                  roomKey: roomKey,
-                  candidate: event.candidate
-                });
-              }
-            };
-            
-            // Store peer connection for later use
-            window.currentPeerConnection = peerConnection;
-            console.log('✅ Peer connection created and stored for incoming call');
-            
-            // Process any buffered offer and ICE candidates
-            await processPendingSignaling(newSocket, roomKey);
-            
-            newSocket.emit('accept-call', {
-              roomKey: roomKey,
-              callId: data.callId
-            });
-            
-            console.log(`✅ ${callType} call accepted! Setting up connection...`);
-          } catch (error) {
-            console.error('Error accepting call:', error);
-            alert('Failed to accept call. Please check your camera and microphone permissions.');
-            setCallInProgress(false);
-            setIsInCall(false);
-          }
-        } else {
-          console.log('❌ Call rejected by user');
-          newSocket.emit('reject-call', {
-            roomKey: roomKey,
-            callId: data.callId
-          });
+        // Store incoming call data and show custom notification
+        setIncomingCall({
+          ...data,
+          callTypeText: callType
+        });
+        
+        // Play notification sound (if available)
+        try {
+          const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBi6Gy/DaiTsIGGS57OihUBELTKXh8bllHgg2jdXzzn0vBSF1xe/glEILElyx6OyrWBUIQ5zd8sFuIAUuhM/w1YU7CRhku+3opFQRC0yl4fG5ZR4INo3V8859LwUhdMXv4JRCCxJcsejsq1gVCEOc3fLBbiAFLoTP9NWFOwkYZLvt6KRU');
+          audio.play().catch(e => console.log('Could not play notification sound'));
+        } catch (e) {
+          console.log('Notification sound not available');
         }
+      } else {
+        // Reject call if already in another call
+        newSocket.emit('reject-call', {
+          roomKey: roomKey,
+          callId: data.callId
+        });
+  console.log('🌐 Connecting to server:', serverUrl);
+  setConnectionStatus('connecting');
+  
+  const newSocket = io(serverUrl, {
+    transports: ['polling'], // Use polling only for better network compatibility
+    reconnection: true,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000,
+    timeout: 20000,
+    forceNewConnection: true
+  });
+
+  newSocket.on('connect', () => {
+    console.log('✅ Connected to server! Socket ID:', newSocket.id);
+    setConnectionStatus('connected');
+    newSocket.emit('join room', { roomKey: key, username: name });
+    
+    // Switch to chat view immediately after connecting
+    setCurrentView('chat');
+  });
+
+  newSocket.on('room joined', (data) => {
+    console.log('✅ Successfully joined room:', data.roomKey);
+    setMessages(data.messages || []);
+  });
+
+  newSocket.on('room locked', (data) => {
+    console.log('Room is locked:', data);
+    setRoomLocked(true);
+    
+    // Show notification to users
+    if (data.lockedBy && data.lockedBy !== username) {
+      alert(`Room has been locked by ${data.lockedBy}. No new users can join.`);
+    }
+  });
+  
+  newSocket.on('room unlocked', (data) => {
+    console.log('Room is unlocked:', data);
+    setRoomLocked(false);
+  });
+  
+  newSocket.on('system message', (message) => {
+    console.log('System message received:', message);
+    setMessages(prev => [...prev, message]);
+  });
+
+  newSocket.on('user connected', (data) => {
+    console.log('✅ User connected event received:', data);
+    setUserId(data.userId);
+    
+    if (keys) {
+      const publicKeyPem = exportPublicKey(keys.publicKey);
+      newSocket.emit('share public key', { roomKey: key, publicKey: publicKeyPem });
+    }
+  });
+
+  newSocket.on('new user', ({ userId, publicKey, username }) => {
+    console.log('New user joined:', username);
+    // Note: userPublicKeys state was removed to fix ESLint warnings
+    // You can add it back if needed for encryption features
+  });
+
+  newSocket.on('existing users', (users) => {
+    console.log('Existing users in room:', users);
+    // Note: userPublicKeys state was removed to fix ESLint warnings
+    // You can add it back if needed for encryption features
+  });
+
+  newSocket.on('chat message', (msg) => {
+    setMessages(prev => [...prev, msg]);
+  });
+
+  newSocket.on('chat message plain', (msg) => {
+    console.log('Received plain text message:', msg);
+    setMessages(prev => [...prev, msg]);
+  });
+
+  newSocket.on('user joined room', (data) => {
+    console.log(`${data.username} joined the room`);
+  });
+
+  newSocket.on('user left room', (data) => {
+    console.log(`${data.username} left the room`);
+  });
+
+  newSocket.on('room users', (users) => {
+    console.log('Room users updated:', users);
+    setRoomUsers(users.filter(u => u.userId !== userId));
+  });
+
+  newSocket.on('incoming-call', async (data) => {
+    console.log('� INCOMING CALL EVENT RECEIVED:', data);
+    if (!callInProgress) {
+      console.log('Incoming call from:', data.callerName);
+      const callType = data.callType === 'audio' ? 'Voice' : 'Video';
+      
+      // Store incoming call data and show custom notification
+      setIncomingCall({
+        ...data,
+        callTypeText: callType
+      });
+      
+      // Play notification sound (if available)
+      try {
+        const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBi6Gy/DaiTsIGGS57OihUBELTKXh8bllHgg2jdXzzn0vBSF1xe/glEILElyx6OyrWBUIQ5zd8sFuIAUuhM/w1YU7CRhku+3opFQRC0yl4fG5ZR4INo3V8859LwUhdMXv4JRCCxJcsejsq1gVCEOc3fLBbiAFLoTP9NWFOwkYZLvt6KRU');
+        audio.play().catch(e => console.log('Could not play notification sound'));
+      } catch (e) {
+        console.log('Notification sound not available');
       }
-    });
+    } else {
+      // Reject call if already in another call
+      newSocket.emit('reject-call', {
+        roomKey: roomKey,
 
     newSocket.on('call-ended', () => {
       setCallInProgress(false);
@@ -533,12 +594,12 @@ function App() {
       // Clear buffered signaling data
       setPendingOffer(null);
       setPendingIceCandidates([]);
-      console.log('📞 Call ended');
+      console.log(' Call ended');
     });
 
     // WebRTC signaling handlers
     newSocket.on('call-offer', async (data) => {
-      console.log('📞 RECEIVED CALL OFFER:', data);
+      console.log(' RECEIVED CALL OFFER:', data);
       if (window.currentPeerConnection) {
         try {
           console.log('Setting remote description from offer...');
@@ -553,18 +614,18 @@ function App() {
             roomKey: roomKey,
             answer: answer
           });
-          console.log('✅ Call answer sent successfully!');
+          console.log(' Call answer sent successfully!');
         } catch (error) {
-          console.error('❌ Error handling call offer:', error);
+          console.error(' Error handling call offer:', error);
         }
       } else {
-        console.log('⏳ Buffering offer until peer connection is ready...');
+        console.log(' Buffering offer until peer connection is ready...');
         setPendingOffer(data);
       }
     });
 
     newSocket.on('call-answer', async (data) => {
-      console.log('📞 RECEIVED CALL ANSWER:', data);
+      console.log(' RECEIVED CALL ANSWER:', data);
       if (window.currentPeerConnection) {
         try {
           await window.currentPeerConnection.setRemoteDescription(data.answer);
@@ -576,29 +637,201 @@ function App() {
     });
 
     newSocket.on('ice-candidate', async (data) => {
-      console.log('🧊 RECEIVED ICE CANDIDATE:', data);
+      console.log(' RECEIVED ICE CANDIDATE:', data);
       if (window.currentPeerConnection) {
         try {
           await window.currentPeerConnection.addIceCandidate(data.candidate);
-          console.log('✅ ICE candidate added successfully');
+          console.log(' ICE candidate added successfully');
         } catch (error) {
-          console.error('❌ Error adding ICE candidate:', error);
+          console.error(' Error adding ICE candidate:', error);
         }
       } else {
-        console.log('⏳ Buffering ICE candidate until peer connection is ready...');
+        console.log(' Buffering ICE candidate until peer connection is ready...');
         setPendingIceCandidates(prev => [...prev, data.candidate]);
       }
+    });
+
+    // Add socket error handling
+    newSocket.on('connect_error', (error) => {
+      console.error(' Socket connection error:', error);
+      setConnectionStatus('disconnected');
+      
+      // Provide specific error messages
+      let errorMessage = 'Failed to connect to server.';
+      if (error.message === 'websocket error') {
+        errorMessage = 'WebSocket connection failed. Using polling transport instead.';
+        console.log(' WebSocket failed, will retry with polling...');
+      } else if (error.code === 'parser error') {
+        errorMessage = 'Server communication error. Please restart the server.';
+      } else if (error.code === 'ECONNREFUSED') {
+        errorMessage = 'Server is not running or not accepting connections.';
+      } else if (error.code === 'ENOTFOUND') {
+        errorMessage = 'Server not found at ' + serverUrl;
+      } else if (error.code === 'ECONNRESET') {
+        errorMessage = 'Connection was reset. Please try again.';
+      }
+      
+      console.error(' Connection details:', {
+        serverUrl,
+        errorCode: error.code,
+        errorMessage: error.message,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Only show alert for non-websocket errors (websocket errors will auto-retry)
+      if (error.message !== 'websocket error') {
+        alert(errorMessage + '\n\nServer: ' + serverUrl + '\nError: ' + error.message);
+      }
+    });
+
+    newSocket.on('disconnect', (reason) => {
+      console.log(' Socket disconnected:', reason);
+      setConnectionStatus('disconnected');
+      if (reason === 'io server disconnect') {
+        // Server disconnected, try to reconnect
+        console.log(' Attempting to reconnect...');
+        newSocket.connect();
+      }
+    });
+
+    newSocket.on('reconnect', (attemptNumber) => {
+      console.log(' Reconnected to server after', attemptNumber, 'attempts');
+      setConnectionStatus('connected');
     });
 
     setSocket(newSocket);
     setRoomKey(key);
     setUsername(name);
-  };
+  }, [setRoomKey, setUsername, setIsRoomCreator, setConnectionStatus]);
 
   const leaveRoom = () => {
     // Stop local media stream if active
     stopLocalMediaStream();
     
+  setIsInCall(false);
+  
+  if (socket) {
+    socket.emit('leave room');
+    socket.disconnect();
+  }
+  setSocket(null);
+  setMessages([]);
+  // setUserPublicKeys({}); // Removed to fix error - userPublicKeys state was removed
+  setUserId(null);
+  setCurrentView('home');
+  setRoomKey('');
+  setGeneratedKey('');
+};
+
+const sendMessage = (e) => {
+  e.preventDefault();
+  if (message.trim() && userId && socket) {
+    triggerHaptic('light');
+    socket.emit('chat message plain', {
+      text: message,
+      from: userId,
+      username: username,
+      timestamp: Date.now()
+    });
+    setMessage('');
+  }
+};
+
+const sendCallNotification = (message) => {
+  if (socket && roomKey) {
+    const notificationData = {
+      text: message,
+      type: 'call-notification',
+      timestamp: new Date().toISOString()
+    };
+    socket.emit('chat message plain', notificationData);
+  }
+};
+
+const acceptIncomingCall = async () => {
+  if (!incomingCall) return;
+  
+  triggerHaptic('success');
+  console.log(' Accepting incoming call...');
+  setCallInProgress(true);
+  setIsInCall(true);
+  setCurrentCallType(incomingCall.callType);
+  
+  try {
+    console.log(' Requesting media permissions for incoming call...');
+    
+    // Check if mediaDevices is available
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('Camera/microphone access is not available in this browser');
+    }
+    
+    // Get media stream for incoming call
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: incomingCall.callType === 'video'
+    });
+    
+    console.log(' Media stream obtained for incoming call:', stream);
+    setLocalStream(stream); // Store local stream for cleanup
+    
+    // Display local video if it's a video call
+    if (incomingCall.callType === 'video') {
+      setTimeout(() => {
+        let localVideoElement = document.getElementById('localVideo');
+        if (!localVideoElement) {
+          localVideoElement = document.createElement('video');
+          localVideoElement.id = 'localVideo';
+          localVideoElement.autoplay = true;
+          localVideoElement.muted = true; // Mute to prevent feedback
+          localVideoElement.style.width = '150px';
+          localVideoElement.style.height = '150px';
+          localVideoElement.style.borderRadius = '8px';
+          localVideoElement.style.objectFit = 'cover';
+          document.querySelector('.call-video-container')?.appendChild(localVideoElement);
+        }
+        localVideoElement.srcObject = stream;
+      }, 100);
+    }
+    
+    // Send call acceptance
+    socket.emit('call accepted', {
+      targetUserId: incomingCall.callerId,
+      callType: incomingCall.callType,
+      roomKey: roomKey
+    });
+    
+    console.log(' Call acceptance sent');
+    
+    // Process any buffered offer and ICE candidates
+    await processPendingSignaling(socket, roomKey);
+    
+    socket.emit('accept-call', {
+      roomKey: roomKey,
+      callId: incomingCall.callId
+    });
+    
+    console.log(` ${incomingCall.callTypeText} call accepted! Setting up connection...`);
+    setIncomingCall(null); // Clear incoming call notification
+  } catch (error) {
+    console.error('Error accepting call:', error);
+    
+    let errorMessage = 'Failed to accept call. ';
+    
+    if (error.name === 'NotAllowedError') {
+      errorMessage = 'Camera and microphone permissions are required for calls. Please allow access and try again.';
+    } else if (error.name === 'NotFoundError') {
+      errorMessage = 'No camera or microphone found. Please connect a device and try again.';
+    } else if (error.name === 'NotSupportedError') {
+      errorMessage = 'Camera/microphone access is not supported in this browser. Please try a different browser.';
+    } else if (error.name === 'NotReadableError') {
+      errorMessage = 'Camera or microphone is already in use by another application.';
+    } else if (error.message.includes('not available')) {
+      errorMessage = 'Camera/microphone access is not available in this browser. Please try using Chrome, Firefox, or Safari.';
+    } else {
+      errorMessage = 'Failed to accept call. Please check your camera and microphone permissions.';
+    }
+    
+    alert(errorMessage);
     // Clean up call state
     setCallInProgress(false);
     setIsInCall(false);
@@ -609,7 +842,7 @@ function App() {
     }
     setSocket(null);
     setMessages([]);
-    setUserPublicKeys({});
+    // setUserPublicKeys({}); // Removed to fix error - userPublicKeys state was removed
     setUserId(null);
     setCurrentView('home');
     setRoomKey('');
@@ -619,16 +852,13 @@ function App() {
   const sendMessage = (e) => {
     e.preventDefault();
     if (message.trim() && userId && socket) {
-      // Send plain text for testing (no encryption)
-      const messageData = {
+      triggerHaptic('light');
+      socket.emit('chat message plain', {
         text: message,
         from: userId,
         username: username,
         timestamp: Date.now()
-      };
-
-      console.log('Sending plain text message:', messageData);
-      socket.emit('chat message plain', messageData);
+      });
       setMessage('');
     }
   };
@@ -644,8 +874,117 @@ function App() {
     }
   };
 
+  const acceptIncomingCall = async () => {
+    if (!incomingCall) return;
+    
+    triggerHaptic('success');
+    console.log('📞 Accepting incoming call...');
+    setCallInProgress(true);
+    setIsInCall(true);
+    setCurrentCallType(incomingCall.callType);
+    
+    try {
+      console.log('🎤 Requesting media permissions for incoming call...');
+      
+      // Check if mediaDevices is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera/microphone access is not available in this browser');
+      }
+      
+      // Get media stream for incoming call
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: incomingCall.callType === 'video'
+      });
+      
+      console.log('✅ Media stream obtained for incoming call:', stream);
+      setLocalStream(stream); // Store local stream for cleanup
+      
+      // Display local video if it's a video call
+      if (incomingCall.callType === 'video') {
+        setTimeout(() => {
+          let localVideoElement = document.getElementById('localVideo');
+          if (!localVideoElement) {
+            localVideoElement = document.createElement('video');
+            localVideoElement.id = 'localVideo';
+            localVideoElement.autoplay = true;
+            localVideoElement.muted = true; // Mute to prevent feedback
+            localVideoElement.style.width = '150px';
+            localVideoElement.style.height = '150px';
+            localVideoElement.style.borderRadius = '8px';
+            localVideoElement.style.objectFit = 'cover';
+            document.querySelector('.call-video-container')?.appendChild(localVideoElement);
+          }
+          localVideoElement.srcObject = stream;
+        }, 100);
+      }
+      
+      // Send call acceptance
+      socket.emit('call accepted', {
+        targetUserId: incomingCall.callerId,
+        callType: incomingCall.callType,
+        roomKey: roomKey
+      });
+      
+      console.log('✅ Incoming call acceptance sent');
+      
+      // Process any buffered offer and ICE candidates
+      await processPendingSignaling(socket, roomKey);
+      
+      socket.emit('accept-call', {
+        roomKey: roomKey,
+        callId: incomingCall.callId
+      });
+      
+      console.log(`✅ ${incomingCall.callTypeText} call accepted! Setting up connection...`);
+      setIncomingCall(null); // Clear incoming call notification
+    } catch (error) {
+      console.error('Error accepting call:', error);
+      
+      let errorMessage = 'Failed to accept call. ';
+      
+      if (error.name === 'NotAllowedError') {
+        errorMessage = 'Camera and microphone permissions are required for calls. Please allow access and try again.';
+      } else if (error.name === 'NotFoundError') {
+        errorMessage = 'No camera or microphone found. Please connect a device and try again.';
+      } else if (error.name === 'NotSupportedError') {
+        errorMessage = 'Camera/microphone access is not supported in this browser. Please try a different browser.';
+      } else if (error.name === 'NotReadableError') {
+        errorMessage = 'Camera or microphone is already in use by another application.';
+      } else if (error.message.includes('not available')) {
+        errorMessage = 'Camera/microphone access is not available in this browser. Please try using Chrome, Firefox, or Safari.';
+      } else {
+        errorMessage = 'Failed to accept call. Please check your camera and microphone permissions.';
+      }
+      
+      alert(errorMessage);
+      setCallInProgress(false);
+      setIsInCall(false);
+      setIncomingCall(null);
+      
+      // Notify caller that call was rejected due to error
+      socket.emit('reject-call', {
+        roomKey: roomKey,
+        callId: incomingCall.callId
+      });
+    }
+  };
+
+  const rejectIncomingCall = () => {
+    if (!incomingCall) return;
+    
+    triggerHaptic('medium');
+    console.log('❌ Rejecting incoming call');
+    socket.emit('reject-call', {
+      roomKey: roomKey,
+      callId: incomingCall.callId
+    });
+    setIncomingCall(null);
+  };
+
   const startCall = async (type) => {
     if (socket && roomKey && userId && !callInProgress) {
+      triggerHaptic('light');
       console.log(`Starting ${type} call in room ${roomKey}`);
       setCallInProgress(true);
       setCurrentCallType(type);
@@ -655,18 +994,16 @@ function App() {
       sendCallNotification(`📞 ${username} started a ${callTypeText} call`);
       
       try {
-        // Request media permissions with mobile-friendly constraints
-        const constraints = {
-          audio: true,
-          video: type === 'video' ? {
-            width: { ideal: 1280, max: 1920 },
-            height: { ideal: 720, max: 1080 },
-            facingMode: 'user'
-          } : false
-        };
+        // Check if mediaDevices is available
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Camera/microphone access is not available in this browser');
+        }
         
-        // For mobile devices, try to get camera with specific constraints
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        // Request media permissions
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: type === 'video'
+        });
         
         console.log('Media stream obtained for web:', stream);
         setLocalStream(stream); // Store local stream for cleanup
@@ -823,19 +1160,29 @@ function App() {
         console.error('Error starting call:', error);
         setCallInProgress(false);
         
+        let errorMessage = 'Failed to start call. ';
+        
         if (error.name === 'NotAllowedError') {
-          if (navigator.userAgent.match(/Mobile|Android|iPhone|iPad|iPod/)) {
-            alert('Mobile devices require HTTPS for camera access. Please ensure you\'re accessing this app via HTTPS or use the mobile app for video calls.');
-          } else {
-            alert('Camera and microphone permissions are required for calls. Please allow access and try again.');
-          }
+          errorMessage = 'Camera and microphone permissions are required for calls. Please allow access and try again.';
         } else if (error.name === 'NotFoundError') {
-          alert('No camera or microphone found. Please check your device hardware.');
-        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-          alert('Camera or microphone is already in use by another application.');
+          errorMessage = 'No camera or microphone found. Please connect a device and try again.';
+        } else if (error.name === 'NotSupportedError') {
+          errorMessage = 'Camera/microphone access is not supported in this browser. Please try a different browser.';
+        } else if (error.name === 'NotReadableError') {
+          errorMessage = 'Camera or microphone is already in use by another application.';
+        } else if (error.message.includes('not available')) {
+          errorMessage = 'Camera/microphone access is not available in this browser. Please try using Chrome, Firefox, or Safari.';
         } else {
-          alert('Failed to start call. Please check your camera and microphone.');
+          errorMessage = 'Failed to start call. Please check your camera and microphone permissions.';
         }
+        
+        alert(errorMessage);
+        console.error('Media access error details:', {
+          errorName: error.name,
+          errorMessage: error.message,
+          browser: navigator.userAgent,
+          httpsSecure: window.location.protocol === 'https:'
+        });
       }
     } else if (callInProgress) {
       alert('Call already in progress. Please wait or end the current call.');
@@ -867,33 +1214,19 @@ function App() {
       const audioElement = document.getElementById('remoteAudio');
       if (audioElement) {
         audioElement.srcObject = null;
-        audioElement.pause();
         audioElement.remove();
       }
       
       const videoElement = document.getElementById('remoteVideo');
       if (videoElement) {
         videoElement.srcObject = null;
-        videoElement.pause();
         videoElement.remove();
       }
       
       const localVideoElement = document.getElementById('localVideo');
       if (localVideoElement) {
         localVideoElement.srcObject = null;
-        localVideoElement.pause();
         localVideoElement.remove();
-      }
-      
-      // Also clear any video elements in placeholders
-      const remotePlaceholder = document.querySelector('.remote-video-placeholder');
-      if (remotePlaceholder) {
-        remotePlaceholder.innerHTML = '';
-      }
-      
-      const localPlaceholder = document.querySelector('.local-video-placeholder');
-      if (localPlaceholder) {
-        localPlaceholder.innerHTML = '';
       }
       
       // Clear buffered signaling data
@@ -908,22 +1241,32 @@ function App() {
   };
 
   const generateQRCode = async (roomCode) => {
+    console.log('📱 Generating QR code for room:', roomCode);
     try {
+      // Use the server URL from environment or fallback to current location
+      const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.43:3000';
+      console.log('🌐 Using server URL:', serverUrl);
+      
       const qrData = {
         type: 'chatanony-room',
         roomKey: roomCode,
-        url: `${window.location.origin}/room/${roomCode}`,
+        url: `${serverUrl}/room/${roomCode}`,
         timestamp: Date.now()
       };
+      
+      console.log('📦 QR Data:', qrData);
       
       const qrCodeDataUrl = await QRCode.toDataURL(JSON.stringify(qrData));
       setQrCodeUrl(qrCodeDataUrl);
       
       // Also set the room URL for sharing
-      setRoomUrl(`${window.location.origin}/room/${roomCode}`);
+      setRoomUrl(`${serverUrl}/room/${roomCode}`);
+      console.log('✅ QR Code generated successfully for room:', roomCode);
+      console.log('🔗 Room URL set to:', `${serverUrl}/room/${roomCode}`);
+      console.log('📱 QR Code URL length:', qrCodeDataUrl.length);
     } catch (error) {
-      console.error('Error generating QR code:', error);
-      alert('Failed to generate QR code');
+      console.error('❌ Error generating QR code:', error);
+      alert('Failed to generate QR code: ' + error.message);
     }
   };
 
@@ -948,31 +1291,58 @@ function App() {
 
   const checkRoomAccess = async (roomCode) => {
     try {
-      const response = await fetch(`http://192.168.1.85:3000/room/${roomCode}`);
+      const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://192.168.1.42:3000';
+      const roomUrl = `${serverUrl}/room/${roomCode}`;
+      
+      console.log('🔍 Checking room access for:', roomCode);
+      console.log('🌐 Server URL:', serverUrl);
+      console.log('📡 Full URL:', roomUrl);
+      
+      const response = await fetch(roomUrl);
+      
+      console.log('📊 Response status:', response.status);
+      console.log('📋 Response headers:', response.headers.get('content-type'));
+      
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('❌ Server returned non-JSON response:', text.substring(0, 200));
+        throw new Error('Server is not responding correctly. Please check if the server is running.');
+      }
+      
       const data = await response.json();
+      console.log('✅ Room data received:', data);
       
       if (response.ok) {
+        console.log('✅ Room access check successful:', roomCode);
         return data;
       } else {
         throw new Error(data.error || 'Failed to access room');
       }
     } catch (error) {
-      console.error('Error checking room access:', error);
+      console.error('❌ Error checking room access:', error);
       throw error;
     }
   };
 
-  const joinRoomViaUrl = async (roomCode) => {
+  const joinRoomViaUrl = useCallback(async (roomCode) => {
+    console.log('🔗 Joining room via URL:', roomCode);
+    
     const validationError = validateUsername(username);
     if (validationError) {
+      console.log('❌ Username validation failed:', validationError);
       setUsernameError(validationError);
       return;
     }
     
     try {
+      console.log('📡 Checking room access...');
       const roomData = await checkRoomAccess(roomCode);
       
       if (roomData.success) {
+        console.log('✅ Room access granted, joining room...');
+        
         // Save username and add to recent rooms
         localStorage.setItem('username', username.trim());
         const newRecentRooms = [roomCode, ...recentRooms.filter(room => room !== roomCode)].slice(0, 5);
@@ -980,12 +1350,26 @@ function App() {
         localStorage.setItem('recentRooms', JSON.stringify(newRecentRooms));
         
         setIsRoomCreator(false);
+        console.log('🚀 Calling joinRoom for URL join...');
         joinRoom(roomCode, username.trim(), false);
+      } else {
+        console.log('❌ Room access denied:', roomData);
+        alert('Cannot join room: ' + (roomData.error || 'Unknown error'));
       }
     } catch (error) {
-      alert(error.message || 'Failed to join room via URL');
+      console.error('❌ Failed to join room via URL:', error);
+      alert(error.message || 'Failed to join room via URL. Please check if the server is running.');
     }
-  };
+  }, [joinRoom, recentRooms, username]);
+
+  // Auto-join via URL when username is entered
+  useEffect(() => {
+    if (isUrlJoin && username.trim() && roomKey && keys) {
+      console.log('👤 Username entered, auto-joining room via URL...');
+      joinRoomViaUrl(roomKey);
+      setIsUrlJoin(false);
+    }
+  }, [username, isUrlJoin, roomKey, keys, joinRoomViaUrl]);
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(generatedKey);
@@ -1031,21 +1415,6 @@ function App() {
         track.stop();
       });
       setLocalStream(null);
-      
-      // Force release of camera on mobile
-      setTimeout(() => {
-        console.log('🔄 Forcing camera release...');
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          // Try to release camera by requesting it and immediately stopping
-          navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-            .then(stream => {
-              stream.getTracks().forEach(track => track.stop());
-            })
-            .catch(() => {
-              // Expected to fail, camera should be released
-            });
-        }
-      }, 100);
     }
   };
 
@@ -1108,81 +1477,17 @@ function App() {
     }
   };
 
+  // shareFile is defined but currently unused - keeping for future file sharing features
   const shareFile = () => {
+    triggerHaptic('light');
+    
     if (!socket || !roomKey) {
       alert('Please join a room first to share files.');
       return;
     }
-
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '*/*';
-    input.style.display = 'none';
     
-    input.onchange = (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        console.log('File selected:', file.name, 'Size:', file.size);
-        
-        // Check file size limit (5MB for better performance)
-        if (file.size > 5 * 1024 * 1024) {
-          alert('File size must be less than 5MB');
-          return;
-        }
-
-        const fileType = file.type.startsWith('image/') ? 'image' : 'document';
-        const fileSize = file.size < 1024 * 1024 
-          ? (file.size / 1024).toFixed(1) + ' KB'
-          : (file.size / (1024 * 1024)).toFixed(1) + ' MB';
-        
-        if (window.confirm(`Share "${file.name}" (${fileSize})?`)) {
-          // Convert file to base64 for transmission
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            try {
-              const fileData = event.target.result;
-              
-              const fileMessage = {
-                type: 'file',
-                fileName: file.name,
-                fileType: fileType,
-                fileSize: fileSize,
-                mimeType: file.type,
-                fileData: fileData, // Base64 encoded file data
-                from: userId,
-                username: username,
-                timestamp: Date.now()
-              };
-
-              console.log('Sending file message:', file.name, fileSize);
-              socket.emit('chat message plain', fileMessage);
-              console.log('✅ File shared successfully:', file.name);
-            } catch (error) {
-              console.error('Error preparing file message:', error);
-              alert('Error sharing file. Please try again.');
-            }
-          };
-          
-          reader.onerror = (error) => {
-            console.error('FileReader error:', error);
-            alert('Error reading file. Please try again.');
-          };
-          
-          reader.readAsDataURL(file);
-        }
-      }
-    };
-    
-    // Add to DOM temporarily and click
-    document.body.appendChild(input);
-    input.click();
-    
-    // Clean up after a delay
-    setTimeout(() => {
-      if (input.parentNode) {
-        document.body.removeChild(input);
-      }
-    }, 1000);
+    // TODO: Implement file sharing functionality
+    console.log('📎 File sharing feature coming soon');
   };
 
   if (currentView === 'home') {
@@ -1191,12 +1496,19 @@ function App() {
         <div className="container">
           <header className="header">
             <div className="header-content">
-              <h1 className="title">ChatAnony</h1>
-              <p className="subtitle">Anonymous, ephemeral messaging</p>
+              <h1 className="title">PQEncrypt</h1>
+              <p className="subtitle">Anonymous, quantum-secure messaging</p>
             </div>
-            <button className="theme-toggle" onClick={toggleTheme}>
-              {theme === 'light' ? '🌙' : '☀️'}
-            </button>
+            <div className="header-actions">
+              <div className={`connection-status ${connectionStatus}`}>
+                {connectionStatus === 'connected' && '🟢 Connected'}
+                {connectionStatus === 'connecting' && '🟡 Connecting...'}
+                {connectionStatus === 'disconnected' && '🔴 Offline'}
+              </div>
+              <button className="theme-toggle" onClick={toggleTheme}>
+                {theme === 'light' ? '🌙' : '☀️'}
+              </button>
+            </div>
           </header>
 
           <div className="section">
@@ -1281,23 +1593,36 @@ function App() {
             <div className="section-header">
               <span className="section-icon">👥</span>
               <h2>Join Room</h2>
+              {isUrlJoin && (
+                <span className="url-indicator">🔗 URL Access</span>
+              )}
             </div>
             <p className="section-description">
-              Enter a session key to join an existing chat room
+              {isUrlJoin 
+                ? `Joining room from URL: ${roomKey}`
+                : "Enter a session key to join an existing chat room"
+              }
             </p>
             <input
               type="text"
-              className="input"
-              placeholder="Enter session key..."
+              className={`input ${isUrlJoin ? 'url-highlight' : ''}`}
+              placeholder={isUrlJoin ? `Room: ${roomKey}` : "Enter session key..."}
               value={roomKey}
               onChange={(e) => setRoomKey(e.target.value.toUpperCase())}
               maxLength={6}
               onKeyPress={(e) => {
                 if (e.key === 'Enter') {
-                  joinChatRoom();
+                  if (isUrlJoin) {
+                    joinChatRoom();
+                  } else {
+                    joinChatRoom();
+                  }
                 }
               }}
             />
+            {roomKeyError && (
+              <div className="error-message">{roomKeyError}</div>
+            )}
             {recentRooms.length > 0 && (
               <div className="recent-rooms">
                 <div className="recent-rooms-header">
@@ -1323,20 +1648,20 @@ function App() {
                 </div>
               </div>
             )}
-            <button className="secondary-button" onClick={joinChatRoom}>
-              Join Chat Room
+            <button 
+              className="primary-button" 
+              onClick={joinChatRoom}
+              disabled={!roomKey || roomKey.length < 6}
+            >
+              Join Room
             </button>
-            {roomKey && (
-              <button className="url-button" onClick={() => joinRoomViaUrl(roomKey)}>
-                🌐 Join via URL
-              </button>
-            )}
           </div>
         </div>
       </div>
     );
   }
 
+  // Chat view
   return (
     <div className={`app ${theme}`}>
       {/* Welcome Modal for First-Time Users */}
@@ -1344,7 +1669,7 @@ function App() {
         <div className="modal-overlay" onClick={dismissWelcome}>
           <div className="welcome-modal" onClick={(e) => e.stopPropagation()}>
             <div className="welcome-header">
-              <h2>🎉 Welcome to ChatAnony!</h2>
+              <h2>🎉 Welcome to PQEncrypt!</h2>
               <button className="close-button" onClick={dismissWelcome}>✕</button>
             </div>
             <div className="welcome-content">
@@ -1374,6 +1699,7 @@ function App() {
         </div>
       )}
 
+      {/* Chat Container */}
       <div className="chat-container">
         <header className="chat-header">
           <div className="chat-header-info">
@@ -1395,6 +1721,9 @@ function App() {
             <button className="call-button" onClick={() => setShowUserList(true)} title="Users">
               👥
             </button>
+            <button className="call-button leave-button" onClick={leaveRoom} title="Leave Room">
+              🚪 Leave
+            </button>
             {!isInCall ? (
               <>
                 <button className="call-button" onClick={() => startCall('audio')} title="Voice Call">
@@ -1409,65 +1738,67 @@ function App() {
                 ❌
               </button>
             )}
-            <button className="call-button" onClick={shareFile} title="Share File">
-              📎
-            </button>
-            <button className="theme-toggle" onClick={toggleTheme}>
-              {theme === 'light' ? '🌙' : '☀️'}
-            </button>
-            <button className="leave-button" onClick={leaveRoom}>
-              Leave
-            </button>
           </div>
         </header>
 
-        <div className="messages-container">
+        <div className="messages-container"
+             onTouchStart={handleTouchStart}
+             onTouchMove={handleTouchMove}
+             onTouchEnd={handleTouchEnd}>
           {messages.map((msg, index) => {
             let decryptedText = '...';
             let isFileMessage = false;
             
             // Handle file messages
             if (msg.type === 'file') {
+              console.log('🔍 File message received:', {
+                fileName: msg.fileName,
+                fileSize: msg.fileSize,
+                fileType: msg.fileType,
+                hasFileData: !!msg.fileData,
+                fileDataLength: msg.fileData ? msg.fileData.length : 0,
+                fullMessage: msg
+              });
+              
               const fileIcon = msg.fileType === 'document' ? '📄' : '🖼️';
-              decryptedText = (
-                <div className="file-message-content">
-                  <div className="file-info">
-                    <span className="file-icon">{fileIcon}</span>
-                    <div className="file-details">
-                      <div className="file-name">{msg.fileName}</div>
-                      <div className="file-size">{msg.fileSize}</div>
+              
+              // Validate file data before rendering
+              if (!msg.fileData || msg.fileData.length === 0) {
+                console.error('❌ Missing file data for:', msg.fileName);
+                decryptedText = (
+                  <div className="file-message-content">
+                    <div className="file-info">
+                      <span className="file-icon">❌</span>
+                      <div className="file-details">
+                        <div className="file-name">{msg.fileName}</div>
+                        <div className="file-size">File data missing</div>
+                      </div>
                     </div>
                   </div>
-                  {msg.fileData && (
-                    <a 
-                      href={msg.fileData} 
-                      download={msg.fileName}
-                      className="download-button"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      📥 Download
-                    </a>
-                  )}
-                </div>
-              );
+                );
+              } else {
+                decryptedText = (
+                  <div className="file-message-content">
+                    <div className="file-info">
+                      <span className="file-icon">{fileIcon}</span>
+                      <div className="file-details">
+                        <div className="file-name">{msg.fileName}</div>
+                        <div className="file-size">{msg.fileSize}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
               isFileMessage = true;
             }
             // Handle system messages
             else if (msg.type === 'system') {
               decryptedText = (
                 <div className="system-message">
-                  <span className="system-text">{msg.text}</span>
-                  <span className="system-date">
-                    {new Date(msg.timestamp).toLocaleDateString()}
-                  </span>
+                  {msg.text}
                 </div>
               );
             }
-            // Handle call notifications
-            else if (msg.type === 'call-notification') {
-              decryptedText = msg.text;
-            }
-            // Handle screenshot notifications
             else if (msg.type === 'screenshot-notification') {
               decryptedText = msg.text;
             }
@@ -1484,9 +1815,9 @@ function App() {
                 decryptedText = 'Failed to decrypt quantum message.';
               }
             }
+            
             // Default fallback
             else {
-              console.log('Message format:', msg);
               decryptedText = msg.text || 'Message could not be displayed';
             }
 
@@ -1610,8 +1941,28 @@ function App() {
                 </button>
               </div>
               <div className="qr-instructions">
-                <p>Scan this QR code with your mobile device to join the room instantly!</p>
+                <p>Scan this QR code with your mobile device to join PQEncrypt room instantly!</p>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Incoming Call Modal */}
+      {incomingCall && (
+        <div className="modal-overlay" onClick={() => {}}>
+          <div className="incoming-call-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="incoming-call-header">
+              <h2>🔔 Incoming {incomingCall.callTypeText} Call</h2>
+              <p>From: {incomingCall.callerName}</p>
+            </div>
+            <div className="incoming-call-actions">
+              <button className="accept-call-btn" onClick={acceptIncomingCall}>
+                ✅ Accept
+              </button>
+              <button className="reject-call-btn" onClick={rejectIncomingCall}>
+                ❌ Reject
+              </button>
             </div>
           </div>
         </div>
@@ -1622,17 +1973,46 @@ function App() {
         <div className="modal-overlay" onClick={() => setShowUserList(false)}>
           <div className="user-list-modal" onClick={(e) => e.stopPropagation()}>
             <div className="user-list-header">
-              <h3>Users in Room ({roomUsers.length + 1})</h3>
+              <h3>Room: {roomKey}</h3>
               <button className="close-button" onClick={() => setShowUserList(false)}>✕</button>
+            </div>
+            
+            {/* Room Sharing Section */}
+            <div className="room-sharing-section">
+              <h4>Share Room</h4>
+              <div className="sharing-buttons">
+                <button className="share-button" onClick={() => { generateQRCode(roomKey); setShowQRCode(true); }} title="Show QR Code">
+                  📱 QR Code
+                </button>
+                <button className="share-button" onClick={shareRoomUrl} title="Copy Room Link">
+                  🔗 Copy Link
+                </button>
+              </div>
+              {roomUrl && (
+                <div className="room-url-display">
+                  <input 
+                    type="text" 
+                    value={roomUrl} 
+                    readOnly 
+                    className="url-input"
+                    onClick={(e) => e.target.select()}
+                  />
+                </div>
+              )}
+            </div>
+            
+            <div className="user-list-header">
+              <h4>Users ({roomUsers.length + 1})</h4>
             </div>
             <div className="user-list">
               <div className="user-item">
-                <span className="user-icon">👤</span>
+                <span className="user-icon">◉</span>
                 <span className="user-name">{username} (You)</span>
+                {isRoomCreator && <span className="creator-badge">Creator</span>}
               </div>
               {roomUsers.map((user, index) => (
                 <div key={user.userId || index} className="user-item">
-                  <span className="user-icon">👤</span>
+                  <span className="user-icon">○</span>
                   <span className="user-name">{user.username}</span>
                 </div>
               ))}

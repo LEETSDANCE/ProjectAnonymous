@@ -297,7 +297,7 @@ io.on('connection', async (socket) => {
   socket.on('lock room', ({ roomKey }) => {
     if (rooms[roomKey] && rooms[roomKey].users[userId]) {
       rooms[roomKey].locked = true;
-      console.log(`Room ${roomKey} locked by ${username}`);
+      console.log(`Room ${roomKey} locked by ${currentUsername}`);
       
       // Notify all users in the room
       const lockMessage = {
@@ -308,7 +308,7 @@ io.on('connection', async (socket) => {
       };
       
       rooms[roomKey].messages.push(lockMessage);
-      io.to(roomKey).emit('room locked', { roomKey, lockedBy: username });
+      io.to(roomKey).emit('room locked', { roomKey, lockedBy: currentUsername });
       io.to(roomKey).emit('system message', lockMessage);
     }
   });
@@ -316,7 +316,7 @@ io.on('connection', async (socket) => {
   socket.on('unlock room', ({ roomKey }) => {
     if (rooms[roomKey] && rooms[roomKey].users[userId]) {
       rooms[roomKey].locked = false;
-      console.log(`Room ${roomKey} unlocked by ${username}`);
+      console.log(`Room ${roomKey} unlocked by ${currentUsername}`);
       
       // Notify all users in the room
       const unlockMessage = {
@@ -327,7 +327,7 @@ io.on('connection', async (socket) => {
       };
       
       rooms[roomKey].messages.push(unlockMessage);
-      io.to(roomKey).emit('room unlocked', { roomKey, unlockedBy: username });
+      io.to(roomKey).emit('room unlocked', { roomKey, unlockedBy: currentUsername });
       io.to(roomKey).emit('system message', unlockMessage);
     }
   });
