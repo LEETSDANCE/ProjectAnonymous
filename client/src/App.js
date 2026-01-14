@@ -220,7 +220,7 @@ function App() {
     setRoomKey(key);
     setUsername(name);
     
-    const newSocket = io('http://192.168.1.85:3000', {
+    const newSocket = io('http://192.168.78.6:3000', {
       transports: ['polling', 'websocket'],
       reconnection: true,
     });
@@ -619,16 +619,52 @@ function App() {
   const sendMessage = (e) => {
     e.preventDefault();
     if (message.trim() && userId && socket) {
-      // Send plain text for testing (no encryption)
-      const messageData = {
-        text: message,
-        from: userId,
-        username: username,
-        timestamp: Date.now()
-      };
-
-      console.log('Sending plain text message:', messageData);
-      socket.emit('chat message plain', messageData);
+      // Send encrypted message if encryption is available
+      let messageData;
+      if (keys && userPublicKeys && Object.keys(userPublicKeys).length > 0) {
+        try {
+          // Encrypt message for all users
+          const encryptedMessages = {};
+          Object.keys(userPublicKeys).forEach(targetUserId => {
+            if (targetUserId !== userId) {
+              encryptedMessages[targetUserId] = encryptMessage(userPublicKeys[targetUserId], message);
+            }
+          });
+          
+          messageData = {
+            text: message,
+            encrypted: encryptedMessages,
+            from: userId,
+            username: username,
+            timestamp: Date.now()
+          };
+          
+          console.log('Sending encrypted message:', messageData);
+          socket.emit('chat message', messageData);
+        } catch (error) {
+          console.error('Encryption failed, sending plain text:', error);
+          // Fallback to plain text
+          messageData = {
+            text: message,
+            from: userId,
+            username: username,
+            timestamp: Date.now()
+          };
+          socket.emit('chat message plain', messageData);
+        }
+      } else {
+        // Send plain text for testing (no encryption)
+        messageData = {
+          text: message,
+          from: userId,
+          username: username,
+          timestamp: Date.now()
+        };
+        
+        console.log('Sending plain text message:', messageData);
+        socket.emit('chat message plain', messageData);
+      }
+      
       setMessage('');
     }
   };
@@ -910,7 +946,7 @@ function App() {
   const generateQRCode = async (roomCode) => {
     try {
       const qrData = {
-        type: 'chatanony-room',
+        type: 'PQEncrypt-room',
         roomKey: roomCode,
         url: `${window.location.origin}/room/${roomCode}`,
         timestamp: Date.now()
@@ -948,7 +984,7 @@ function App() {
 
   const checkRoomAccess = async (roomCode) => {
     try {
-      const response = await fetch(`http://192.168.1.85:3000/room/${roomCode}`);
+      const response = await fetch(`http://192.168.78.6:3000/room/${roomCode}`);
       const data = await response.json();
       
       if (response.ok) {
@@ -1191,7 +1227,7 @@ function App() {
         <div className="container">
           <header className="header">
             <div className="header-content">
-              <h1 className="title">ChatAnony</h1>
+              <h1 className="title">PQEncrypt</h1>
               <p className="subtitle">Anonymous, ephemeral messaging</p>
             </div>
             <button className="theme-toggle" onClick={toggleTheme}>
@@ -1344,7 +1380,7 @@ function App() {
         <div className="modal-overlay" onClick={dismissWelcome}>
           <div className="welcome-modal" onClick={(e) => e.stopPropagation()}>
             <div className="welcome-header">
-              <h2>🎉 Welcome to ChatAnony!</h2>
+              <h2>🎉 Welcome to PQEncrypt!</h2>
               <button className="close-button" onClick={dismissWelcome}>✕</button>
             </div>
             <div className="welcome-content">

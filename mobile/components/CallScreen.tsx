@@ -36,6 +36,7 @@ const CallScreen: React.FC<CallScreenProps> = ({
 }) => {
   const [localStream, setLocalStream] = useState<any>(null);
   const [remoteStream, setRemoteStream] = useState<any>(null);
+const [remoteStreamKey, setRemoteStreamKey] = useState<number>(0);
   const [isConnected, setIsConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(callType === 'video');
@@ -46,10 +47,12 @@ const CallScreen: React.FC<CallScreenProps> = ({
   const [isReconnecting, setIsReconnecting] = useState(false);
   
   const peerConnection = useRef<RTCPeerConnection | null>(null);
-  const callTimer = useRef<number | null>(null);
-  const connectionTimeout = useRef<number | null>(null);
-  const reconnectTimeout = useRef<number | null>(null);
-  const qualityMonitorInterval = useRef<number | null>(null);
+  const bufferedIceCandidates = useRef<any[]>([]);
+  const isConnectedRef = useRef(false);
+  const callTimer = useRef<any>(null);
+  const connectionTimeout = useRef<any>(null);
+  const reconnectTimeout = useRef<any>(null);
+  const qualityMonitorInterval = useRef<any>(null);
 
   const CONNECTION_TIMEOUT = 30000; // 30 seconds
   const MAX_RECONNECT_ATTEMPTS = 3;
@@ -138,7 +141,7 @@ const CallScreen: React.FC<CallScreenProps> = ({
       }
 
       // Set timeout for reconnection attempt
-      reconnectTimeout.current = setTimeout(() => {
+      connectionTimeout.current = setTimeout(() => {
         if (!isConnected) {
           console.log('⏰ Reconnection attempt timed out');
           if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
@@ -147,18 +150,18 @@ const CallScreen: React.FC<CallScreenProps> = ({
             Alert.alert(
               'Connection Failed',
               'Unable to reconnect after multiple attempts. Please try again later.',
-              [{ text: 'End Call', onPress: onEndCall }]
+              [{ text: 'OK' }]
             );
           }
         }
-      }, 10000); // 10 seconds for each reconnection attempt
+      }, 5000);
 
     } catch (error: any) {
       console.error('Reconnection failed:', error);
       setIsReconnecting(false);
       
       if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-        setTimeout(() => attemptReconnection(), 2000);
+        setTimeout(() => attemptReconnection(), 2000) as any;
       } else {
         Alert.alert(
           'Reconnection Failed',
@@ -234,40 +237,136 @@ const CallScreen: React.FC<CallScreenProps> = ({
     }
   };
 
+  const importPublicKey = (publicKeyString: string) => {
+    try {
+      // Clean the public key string - remove any invalid characters
+      const cleanKeyString = publicKeyString.replace(/[^a-zA-Z0-9]/g, '');
+      const jsonString = Buffer.from(cleanKeyString, 'base64').toString('utf8');
+      const publicKeyData = JSON.parse(jsonString);
+      
+      return {
+        kem: new Uint8Array(publicKeyData.kem),
+        dsa: new Uint8Array(publicKeyData.dsa)
+      };
+    } catch (error) {
+      console.error('Error importing quantum public key:', error);
+      // Return fallback keys if import fails
+      return {
+        kem: new Uint8Array(32),
+        dsa: new Uint8Array(32)
+      };
+    }
+  };
+
   const initializePeerConnection = async () => {
     if (!peerConnection.current) return;
 
     // Set up peer connection event handlers using React Native WebRTC API
     (peerConnection.current as any).onicecandidate = (event: any) => {
       if (event.candidate) {
-        socket.emit('ice-candidate', {
-          roomKey,
-          candidate: event.candidate,
-        });
+        console.log('ICE candidate generated:', event.candidate);
+        // Buffer ICE candidates if no remote description yet
+        if (!peerConnection.current?.remoteDescription) {
+          bufferedIceCandidates.current.push(event.candidate);
+          console.log('ICE candidate buffered (no remote description yet)');
+        } else {
+          socket.emit('ice-candidate', {
+            roomKey,
+            candidate: event.candidate
+          });
+        }
       }
     };
 
     (peerConnection.current as any).ontrack = (event: any) => {
       console.log('Received remote track:', event);
+      console.log('Track details:', {
+        kind: event.track?.kind,
+        enabled: event.track?.enabled,
+        readyState: event.track?.readyState,
+        muted: event.track?.muted
+      });
+      
       if (event.streams && event.streams[0]) {
+        console.log('Setting remote stream:', event.streams[0]);
         setRemoteStream(event.streams[0]);
-        setIsConnected(true);
+        setRemoteStreamKey(Date.now()); // Force re-render
+        
+        // Check if we have media tracks - if so, consider the call connected
+        const stream = event.streams[0];
+        const hasVideo = stream.getVideoTracks().length > 0;
+        const hasAudio = stream.getAudioTracks().length > 0;
+        
+        console.log('Stream tracks:', stream.getTracks());
+        console.log('📹 Video tracks count:', stream.getVideoTracks().length);
+        console.log('🎵 Audio tracks count:', stream.getAudioTracks().length);
+        
+        // If we have any media tracks, mark as connected
+        if (hasVideo || hasAudio) {
+          console.log('✅ Media received - marking call as connected');
+          setIsConnected(true);
+          isConnectedRef.current = true;
+          setConnectionStatus('connected');
+          clearConnectionTimeout();
+          startCallTimer();
+          startQualityMonitoring();
+        }
+        
+        // Ensure stream has video tracks for video calls
+        if (callType === 'video' && stream.getVideoTracks().length === 0) {
+          console.warn('⚠️ No video tracks found in remote stream');
+          console.warn('📹 Stream details:', {
+            id: stream.id,
+            active: stream.active,
+            tracks: stream.getTracks().map((t: any) => ({
+              kind: t.kind,
+              enabled: t.enabled,
+              readyState: t.readyState,
+              muted: t.muted
+            }))
+          });
+          
+          // Try to get video tracks with delay
+          setTimeout(() => {
+            const videoTracks = stream.getVideoTracks();
+            console.log('📹 Delayed video track check:', videoTracks.length);
+            if (videoTracks.length > 0) {
+              console.log('✅ Video tracks found after delay:', videoTracks.length);
+            } else {
+              console.warn('⚠️ Still no video tracks after delay');
+            }
+          }, 1000);
+        } else {
+          console.log('✅ Video tracks found in remote stream:', stream.getVideoTracks().length);
+        }
       }
     };
 
     (peerConnection.current as any).onconnectionstatechange = () => {
-      const state = peerConnection.current?.connectionState;
-      console.log('Connection state:', state);
-      setConnectionStatus(state || 'unknown');
+      const connectionState = peerConnection.current?.connectionState;
+      const iceState = peerConnection.current?.iceConnectionState;
+      const signalingState = peerConnection.current?.signalingState;
       
-      if (state === 'connected') {
+      // Use the most reliable state indicator
+      const state = connectionState || iceState || signalingState;
+      console.log('Connection states:', { connectionState, iceState, signalingState, finalState: state });
+      setConnectionStatus(state || 'connecting');
+      
+      // Consider connection successful when we have remote video tracks
+      const hasRemoteVideo = remoteStream && remoteStream.getVideoTracks().length > 0;
+      const hasRemoteAudio = remoteStream && remoteStream.getAudioTracks().length > 0;
+      const isConnected = (state === 'connected' || state === 'completed') || (hasRemoteVideo || hasRemoteAudio);
+      
+      if (isConnected) {
+        console.log('✅ Call connected successfully!');
         setIsConnected(true);
+        isConnectedRef.current = true;
         setIsReconnecting(false);
         setReconnectAttempts(0);
         startCallTimer();
         startQualityMonitoring();
         clearConnectionTimeout();
-      } else if (state === 'disconnected' || state === 'failed') {
+      } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
         console.log('Call connection failed or disconnected:', state);
         setIsConnected(false);
         stopCallTimer();
@@ -286,7 +385,7 @@ const CallScreen: React.FC<CallScreenProps> = ({
             ]
           );
         }
-      } else if (state === 'connecting') {
+      } else if (state === 'connecting' || state === 'checking') {
         setConnectionStatus('connecting');
         startConnectionTimeout();
       }
@@ -370,12 +469,30 @@ const CallScreen: React.FC<CallScreenProps> = ({
     }
   };
 
+  const processBufferedIceCandidates = async () => {
+    if (bufferedIceCandidates.current.length > 0) {
+      console.log(`Processing ${bufferedIceCandidates.current.length} buffered ICE candidates`);
+      for (const candidate of bufferedIceCandidates.current) {
+        try {
+          await peerConnection.current?.addIceCandidate(candidate);
+          console.log('✅ Buffered ICE candidate added');
+        } catch (error) {
+          console.error('❌ Error adding buffered ICE candidate:', error);
+        }
+      }
+      bufferedIceCandidates.current = [];
+    }
+  };
+
   const setupSocketListeners = () => {
     socket.on('call-offer', async (data: any) => {
       try {
         await peerConnection.current?.setRemoteDescription(
           new RTCSessionDescription(data.offer)
         );
+        
+        // Process any buffered ICE candidates
+        await processBufferedIceCandidates();
         
         const answer = await peerConnection.current?.createAnswer();
         await peerConnection.current?.setLocalDescription(answer);
@@ -394,6 +511,9 @@ const CallScreen: React.FC<CallScreenProps> = ({
         await peerConnection.current?.setRemoteDescription(
           new RTCSessionDescription(data.answer)
         );
+        
+        // Process any buffered ICE candidates
+        await processBufferedIceCandidates();
       } catch (error) {
         console.error('Error handling call answer:', error);
       }
@@ -401,9 +521,15 @@ const CallScreen: React.FC<CallScreenProps> = ({
 
     socket.on('ice-candidate', async (data: any) => {
       try {
-        await peerConnection.current?.addIceCandidate(
-          new RTCIceCandidate(data.candidate)
-        );
+        // Only add ICE candidate if we have a remote description
+        if (peerConnection.current?.remoteDescription) {
+          console.log('Adding ICE candidate:', data.candidate);
+          await peerConnection.current?.addIceCandidate(
+            new RTCIceCandidate(data.candidate)
+          );
+        } else {
+          console.log('ICE candidate ignored - no remote description yet');
+        }
       } catch (error) {
         console.error('Error adding ICE candidate:', error);
       }
@@ -487,14 +613,17 @@ const CallScreen: React.FC<CallScreenProps> = ({
     
     // Set connection timeout (30 seconds)
     connectionTimeout.current = setTimeout(() => {
-      if (!isConnected) {
-        console.log('Call connection timeout');
+      // Use ref to check actual connection state
+      if (!isConnectedRef.current) {
+        console.log('⏰ Connection timeout reached');
         setConnectionStatus('failed');
         Alert.alert(
           'Connection Timeout',
           'Unable to establish call connection. Please check your internet connection and try again.',
           [{ text: 'OK', onPress: onEndCall }]
         );
+      } else {
+        console.log('✅ Timeout check passed - call is connected');
       }
     }, 30000);
     
@@ -536,11 +665,11 @@ const CallScreen: React.FC<CallScreenProps> = ({
         />
       )}
       
-      {/* Audio-only call background */}
-      {callType === 'audio' && (
-        <View style={styles.audioCallBackground}>
-          <Text style={styles.audioCallIcon}>🎵</Text>
-          <Text style={styles.audioCallText}>Audio Call</Text>
+      {/* Remote Audio */}
+      {callType === 'audio' && remoteStream && (
+        <View style={styles.remoteAudioContainer}>
+          <Text style={styles.remoteAudioIcon}>🎵</Text>
+          <Text style={styles.remoteAudioText}>Audio Connected</Text>
         </View>
       )}
 
@@ -618,6 +747,24 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 2,
     borderColor: '#fff',
+  },
+  remoteAudioContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    padding: 20,
+    borderRadius: 10,
+  },
+  remoteAudioIcon: {
+    fontSize: 48,
+    color: '#fff',
+    marginBottom: 10,
+  },
+  remoteAudioText: {
+    fontSize: 18,
+    color: '#fff',
+    fontWeight: 'bold',
   },
   callInfo: {
     position: 'absolute',

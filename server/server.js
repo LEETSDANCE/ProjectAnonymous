@@ -24,6 +24,7 @@ const app = express();
 const server = http.createServer(app);
 const users = {}; // Store { userId: publicKey }
 const rooms = {}; // Store { roomKey: { users: {}, messages: [], locked: false, createdAt: Date.now() } }
+const activeCalls = {}; // Store { roomKey: { callerId: string, receiverId: string, startTime: Date } }
 
 const io = new Server(server, {
   cors: {
@@ -297,7 +298,8 @@ io.on('connection', async (socket) => {
   socket.on('lock room', ({ roomKey }) => {
     if (rooms[roomKey] && rooms[roomKey].users[userId]) {
       rooms[roomKey].locked = true;
-      console.log(`Room ${roomKey} locked by ${currentUsername}`);
+      const username = rooms[roomKey].users[userId].username;
+      console.log(`Room ${roomKey} locked by ${username}`);
       
       // Notify all users in the room
       const lockMessage = {
@@ -308,7 +310,7 @@ io.on('connection', async (socket) => {
       };
       
       rooms[roomKey].messages.push(lockMessage);
-      io.to(roomKey).emit('room locked', { roomKey, lockedBy: currentUsername });
+      io.to(roomKey).emit('room locked', { roomKey, lockedBy: username });
       io.to(roomKey).emit('system message', lockMessage);
     }
   });
@@ -316,7 +318,8 @@ io.on('connection', async (socket) => {
   socket.on('unlock room', ({ roomKey }) => {
     if (rooms[roomKey] && rooms[roomKey].users[userId]) {
       rooms[roomKey].locked = false;
-      console.log(`Room ${roomKey} unlocked by ${currentUsername}`);
+      const username = rooms[roomKey].users[userId].username;
+      console.log(`Room ${roomKey} unlocked by ${username}`);
       
       // Notify all users in the room
       const unlockMessage = {
@@ -327,7 +330,7 @@ io.on('connection', async (socket) => {
       };
       
       rooms[roomKey].messages.push(unlockMessage);
-      io.to(roomKey).emit('room unlocked', { roomKey, unlockedBy: currentUsername });
+      io.to(roomKey).emit('room unlocked', { roomKey, unlockedBy: username });
       io.to(roomKey).emit('system message', unlockMessage);
     }
   });
@@ -380,42 +383,97 @@ io.on('connection', async (socket) => {
     }
   });
 
-  // Handle call signaling (consolidated)
+  // Handle call signaling with proper peer-to-peer routing
   socket.on('call-user', (data) => {
     console.log(`Call initiated in room ${data.roomKey} by ${data.username}`);
-    socket.to(data.roomKey).emit('incoming-call', {
-      callType: data.callType,
-      callerName: data.username,
-      callerId: data.from,
-      callId: `call_${Date.now()}`
-    });
+    
+    // Initialize call tracking
+    if (!activeCalls[data.roomKey]) {
+      const roomUsers = rooms[data.roomKey]?.users || {};
+      const otherUsers = Object.keys(roomUsers).filter(id => id !== userId);
+      
+      if (otherUsers.length > 0) {
+        const receiverId = otherUsers[0];
+        const receiverSocketId = roomUsers[receiverId].socketId;
+        
+        // Track active call
+        activeCalls[data.roomKey] = {
+          callerId: userId,
+          receiverId: receiverId,
+          startTime: Date.now()
+        };
+        
+        // Send directly to specific user
+        io.to(receiverSocketId).emit('incoming-call', {
+          callType: data.callType,
+          callerName: data.username,
+          callerId: data.from,
+          callId: `call_${Date.now()}`
+        });
+        
+        console.log(`Call routed: ${userId} → ${receiverId}`);
+      }
+    }
   });
 
-  // WebRTC signaling handlers
+  // WebRTC signaling handlers with direct routing
   socket.on('call-offer', (data) => {
     console.log('Call offer received for room:', data.roomKey);
-    socket.to(data.roomKey).emit('call-offer', {
-      offer: data.offer,
-      callType: data.callType,
-      callerName: data.callerName,
-      from: userId
-    });
+    
+    const call = activeCalls[data.roomKey];
+    if (call) {
+      // Route offer to the other participant only
+      const targetId = call.callerId === userId ? call.receiverId : call.callerId;
+      const targetSocketId = rooms[data.roomKey]?.users?.[targetId]?.socketId;
+      
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('call-offer', {
+          offer: data.offer,
+          callType: data.callType,
+          callerName: data.callerName,
+          from: userId
+        });
+        console.log(`Offer routed: ${userId} → ${targetId}`);
+      }
+    }
   });
 
   socket.on('call-answer', (data) => {
     console.log('Call answer received for room:', data.roomKey);
-    socket.to(data.roomKey).emit('call-answer', {
-      answer: data.answer,
-      from: userId
-    });
+    
+    const call = activeCalls[data.roomKey];
+    if (call) {
+      // Route answer to the other participant only
+      const targetId = call.callerId === userId ? call.receiverId : call.callerId;
+      const targetSocketId = rooms[data.roomKey]?.users?.[targetId]?.socketId;
+      
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('call-answer', {
+          answer: data.answer,
+          from: userId
+        });
+        console.log(`Answer routed: ${userId} → ${targetId}`);
+      }
+    }
   });
 
   socket.on('ice-candidate', (data) => {
     console.log('ICE candidate received for room:', data.roomKey);
-    socket.to(data.roomKey).emit('ice-candidate', {
-      candidate: data.candidate,
-      from: userId
-    });
+    
+    const call = activeCalls[data.roomKey];
+    if (call) {
+      // Route ICE candidate to the other participant only
+      const targetId = call.callerId === userId ? call.receiverId : call.callerId;
+      const targetSocketId = rooms[data.roomKey]?.users?.[targetId]?.socketId;
+      
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('ice-candidate', {
+          candidate: data.candidate,
+          from: userId
+        });
+        console.log(`ICE candidate routed: ${userId} → ${targetId}`);
+      }
+    }
   });
 
   socket.on('accept-call', (data) => {
@@ -428,9 +486,23 @@ io.on('connection', async (socket) => {
 
   socket.on('end-call', (data) => {
     console.log('Call ended in room:', data.roomKey);
-    socket.to(data.roomKey).emit('call-ended', {
-      from: userId
-    });
+    
+    // Clean up active call
+    if (activeCalls[data.roomKey]) {
+      const call = activeCalls[data.roomKey];
+      const targetId = call.callerId === userId ? call.receiverId : call.callerId;
+      const targetSocketId = rooms[data.roomKey]?.users?.[targetId]?.socketId;
+      
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('call-ended', {
+          from: userId
+        });
+        console.log(`Call end routed: ${userId} → ${targetId}`);
+      }
+      
+      // Remove active call tracking
+      delete activeCalls[data.roomKey];
+    }
   });
 
   // Duplicate handlers removed - using the ones above
@@ -475,6 +547,8 @@ io.on('connection', async (socket) => {
 
 // Start server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log(`Server running on ${HOST}:${PORT}`);
+  console.log(`Access from other devices: http://192.168.78.6:${PORT}`);
 });

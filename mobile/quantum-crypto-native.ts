@@ -3,22 +3,48 @@
 
 import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
+import { Buffer } from 'buffer';
 
-// Simple base64 encoding for React Native
+// React Native compatible crypto polyfill - MUST be set before importing quantum libraries
+if (typeof global !== 'undefined' && !global.crypto) {
+  (global as any).crypto = {
+    getRandomValues: (array: Uint8Array) => {
+      const bytes = new Uint8Array(array.length);
+      for (let i = 0; i < array.length; i++) {
+        bytes[i] = Math.floor(Math.random() * 256);
+      }
+      return bytes;
+    }
+  };
+}
+
+// Simple base64 encoding for React Native (compatible with client's atob)
 const simpleBase64 = {
   encode: (str: string): string => {
-    // Simple hex encoding as fallback for React Native
-    return str.split('').map(char => {
-      return char.charCodeAt(0).toString(16).padStart(2, '0');
-    }).join('');
+    // Use standard base64 encoding (compatible with client's atob)
+    try {
+      return btoa(unescape(str));
+    } catch (error) {
+      console.error('Base64 encode error:', error);
+      // Fallback to hex encoding if btoa fails
+      return str.split('').map(char => {
+        return char.charCodeAt(0).toString(16).padStart(2, '0');
+      }).join('');
+    }
   },
-  decode: (hex: string): string => {
-    // Simple hex decoding as fallback for React Native
-    return hex.match(/.{2}/g)?.map(hexByte => String.fromCharCode(parseInt(hexByte, 16))).join('') || '';
+  decode: (str: string): string => {
+    // Use standard base64 decoding (compatible with client's atob)
+    try {
+      return atob(unescape(str));
+    } catch (error) {
+      console.error('Base64 decode error:', error);
+      // Fallback to hex parsing if atob fails
+      return str.match(/.{2}/g)?.map(hex => String.fromCharCode(parseInt(hex, 16))).join('') || '';
+    }
   }
 };
 
-// Choose security levels - using the highest available variants
+// Choose security levels - using highest available variants
 const KEM_ALGORITHM = ml_kem1024; // Highest security ML-KEM
 const DSA_ALGORITHM = ml_dsa87;   // Highest security ML-DSA
 

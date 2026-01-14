@@ -23,26 +23,21 @@ import {
   importPublicKey,
   encryptMessage,
   decryptMessage,
-} from '../crypto-native';
+} from '../quantum-crypto-native';
 import MessageItem from '../MessageItem';
 import CallScreen from '../components/CallScreen';
 import { launchImageLibrary, MediaType } from 'react-native-image-picker';
+import { Buffer } from 'buffer';
 import forge from 'node-forge';
 
 // Helper function to convert ArrayBuffer to Base64
 const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return forge.util.encode64(binary);
+  return Buffer.from(buffer).toString('base64');
 };
 
 // IMPORTANT: Replace with your server's local IP address
 // On Windows, run `ipconfig` in cmd. On macOS/Linux, run `ifconfig`.
-const SERVER_IP = 'http://192.168.1.41:3000';
+const SERVER_IP = 'http://192.168.78.6:3000';
 
 interface ChatScreenProps {
   route: any;
@@ -55,7 +50,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
   const [messages, setMessages] = useState<any[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [keys, setKeys] = useState<any>(null);
-  const [userPublicKeys, setUserPublicKeys] = useState<any>({});
+  const [userPublicKeys, setUserPublicKeys] = useState<{ [key: string]: any }>({});
   const [socket, setSocket] = useState<any>(null);
   const [roomUsers, setRoomUsers] = useState<any[]>([]);
   const [showUserList, setShowUserList] = useState(false);
@@ -90,13 +85,10 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
     const newSocket = io(SERVER_IP, { 
       transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionDelay: 2000,
-      reconnectionAttempts: 10,
-      timeout: 30000,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+      timeout: 20000,
       forceNew: true,
-      upgrade: true,
-      rememberUpgrade: false,
-      autoConnect: true,
     });
 
     newSocket.on('connect', () => {
@@ -188,14 +180,14 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
       console.log('New user joined:', username);
       try {
         const importedKey = importPublicKey(publicKey);
-        setUserPublicKeys(prev => ({ ...prev, [userId]: importedKey }));
+        setUserPublicKeys((prev: { [key: string]: any }) => ({ ...prev, [userId]: importedKey }));
       } catch (error) {
         console.error('Error importing public key:', error);
       }
     });
 
     // Handle existing users (for key exchange)
-    newSocket.on('existing users', (users) => {
+    newSocket.on('existing users', (users: { [key: string]: any }) => {
       console.log('Received existing users:', Object.keys(users));
       const importedKeys = {};
       for (const id in users) {
@@ -207,7 +199,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
           }
         }
       }
-      setUserPublicKeys(importedKeys);
+      setUserPublicKeys((prev: { [key: string]: any }) => importedKeys);
     });
 
     // Handle chat messages
@@ -222,7 +214,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
 
     // Handle user disconnected
     newSocket.on('user disconnected', ({ userId }: { userId: string }) => {
-      setUserPublicKeys((prevKeys: any) => {
+      setUserPublicKeys((prevKeys: { [key: string]: any }) => {
         const newKeys = { ...prevKeys };
         delete newKeys[userId];
         return newKeys;
@@ -486,9 +478,9 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
     const options = {
       mediaType: 'photo' as MediaType,
       includeBase64: true,
-      maxWidth: 2000,
-      maxHeight: 2000,
-      quality: 0.8,
+      maxWidth: 800,
+      maxHeight: 600,
+      quality: 0.8 as any,
     };
 
     launchImageLibrary(options, (response) => {
@@ -519,7 +511,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
       (text) => {
         if (text && text.trim()) {
           const fileName = `text_${Date.now()}.txt`;
-                    const textData = `data:text/plain;base64,${forge.util.encode64(text)}`;
+          const textData = `data:text/plain;base64,${Buffer.from(text).toString('base64')}`;
           
           const fileMessage = {
             type: 'file',
@@ -600,7 +592,6 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
             <TouchableOpacity 
               style={styles.iconButton} 
               onPress={() => setShowUserList(true)}
-              title="Users"
             >
               <Text style={styles.callIcon}>👥</Text>
             </TouchableOpacity>
