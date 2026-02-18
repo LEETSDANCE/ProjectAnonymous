@@ -37,7 +37,7 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
 
 // IMPORTANT: Replace with your server's local IP address
 // On Windows, run `ipconfig` in cmd. On macOS/Linux, run `ifconfig`.
-const SERVER_IP = 'http://192.168.78.6:3000';
+const SERVER_IP = 'http://192.168.78.5:3000';
 
 interface ChatScreenProps {
   route: any;

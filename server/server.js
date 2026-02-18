@@ -550,5 +550,5 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 server.listen(PORT, HOST, () => {
   console.log(`Server running on ${HOST}:${PORT}`);
-  console.log(`Access from other devices: http://192.168.78.6:${PORT}`);
+  console.log(`Access from other devices: http://192.168.78.5:${PORT}`);
 });
