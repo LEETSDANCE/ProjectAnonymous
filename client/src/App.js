@@ -220,7 +220,7 @@ function App() {
     setRoomKey(key);
     setUsername(name);
     
-    const newSocket = io('http://192.168.137.15:3000', {
+    const newSocket = io('http://3.111.197.212:3000', {
       transports: ['polling', 'websocket'],
       reconnection: true,
     });
