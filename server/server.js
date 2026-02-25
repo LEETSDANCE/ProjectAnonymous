@@ -4,7 +4,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { Pool } = require('pg');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 
 // Import quantum cryptography
 const { 
@@ -124,7 +124,7 @@ io.on('connection', async (socket) => {
   let currentUsername = null;
 
   // Assign a unique ID to the user
-  const userId = uuidv4();
+  const userId = randomUUID();
   currentUserId = userId;
   console.log('Generated userId:', userId);
   socket.emit('user connected', { userId });
