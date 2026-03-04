@@ -37,14 +37,13 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
 
 // IMPORTANT: Replace with your server's local IP address
 // On Windows, run `ipconfig` in cmd. On macOS/Linux, run `ifconfig`.
-const SERVER_IP = 'https://3.110.215.75:3000';
+const SERVER_IP = 'https://maxyserver.servehalflife.com';
 const SERVER_IP_WITH_CACHE = `${SERVER_IP}?t=${Date.now()}`;
 
 // Socket.IO configuration with self-signed certificate support
 const socketOptions = {
   transports: ['polling', 'websocket'],
   reconnection: true,
-  rejectUnauthorized: false, // Ignore self-signed certificate for development
 };
 
 interface ChatScreenProps {
@@ -90,15 +89,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
       connectionRetryCount.current += 1;
     };
     
-    const newSocket = io(SERVER_IP_WITH_CACHE, { 
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionAttempts: 5,
-      timeout: 20000,
-      forceNew: true,
-      rejectUnauthorized: false, // Ignore self-signed certificate for development
-    });
+    const newSocket = io(SERVER_IP_WITH_CACHE, socketOptions);
 
     newSocket.on('connect', () => {
       console.log('✅ Socket connected! ID:', newSocket.id);
