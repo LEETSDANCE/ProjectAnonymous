@@ -220,7 +220,7 @@ function App() {
     setRoomKey(key);
     setUsername(name);
     
-    const newSocket = io('http://3.111.197.212:3000', {
+    const newSocket = io('https://3.110.215.75:3000', {
       transports: ['polling', 'websocket'],
       reconnection: true,
     });
@@ -984,7 +984,7 @@ function App() {
 
   const checkRoomAccess = async (roomCode) => {
     try {
-      const response = await fetch(`http://192.168.137.15:3000/room/${roomCode}`);
+      const response = await fetch(`https://3.110.215.75:3000/room/${roomCode}`);
       const data = await response.json();
       
       if (response.ok) {

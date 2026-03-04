@@ -37,7 +37,8 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
 
 // IMPORTANT: Replace with your server's local IP address
 // On Windows, run `ipconfig` in cmd. On macOS/Linux, run `ifconfig`.
-const SERVER_IP = 'http://3.111.197.212:3000';
+const SERVER_IP = 'https://3.110.215.75:3000';
+const SERVER_IP_WITH_CACHE = `${SERVER_IP}?t=${Date.now()}`;
 
 interface ChatScreenProps {
   route: any;
@@ -82,7 +83,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
       connectionRetryCount.current += 1;
     };
     
-    const newSocket = io(SERVER_IP, { 
+    const newSocket = io(SERVER_IP_WITH_CACHE, { 
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,

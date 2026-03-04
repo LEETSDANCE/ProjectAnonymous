@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Vibration } from 'react-native';
 import { RNCamera } from 'react-native-camera';
 import { useTheme } from '../context/ThemeContext';
 
@@ -9,19 +9,83 @@ interface QRScannerScreenProps {
 
 const QRScannerScreen: React.FC<QRScannerScreenProps> = ({ navigation }) => {
   const { theme } = useTheme();
+  const [isScanning, setIsScanning] = useState(true);
+  const lastScannedRef = useRef<string | null>(null);
+  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const onBarCodeRead = (e: any) => {
     const qrData = e.data;
-    if (qrData) {
-      navigation.navigate('Home', { scannedData: qrData });
+    
+    if (!qrData || !isScanning) return;
+    
+    // Prevent multiple scans of the same QR code
+    if (lastScannedRef.current === qrData) return;
+    
+    lastScannedRef.current = qrData;
+    setIsScanning(false);
+    
+    // Provide haptic feedback
+    Vibration.vibrate(100);
+    
+    // Clean and validate the QR data
+    let cleanedData = qrData.trim();
+    
+    console.log('Raw QR Data:', qrData);
+    console.log('Cleaned QR Data:', cleanedData);
+    
+    // Remove any potential JSON formatting or extra characters
+    if (cleanedData.includes('{') || cleanedData.includes('Type') || cleanedData.includes('"')) {
+      // Try to extract just the session key if it's wrapped in JSON or other format
+      const keyMatch = cleanedData.match(/([A-Z0-9]{4,8})/);
+      if (keyMatch && keyMatch[1]) {
+        cleanedData = keyMatch[1];
+        console.log('Extracted Key:', cleanedData);
+      } else {
+        // If no clear match found, alert user
+        Alert.alert('Invalid QR Code', 'The QR code does not contain a valid session key.');
+        resetScanner();
+        return;
+      }
+    }
+    
+    // Validate that we have a clean session key
+    if (cleanedData.length >= 4 && cleanedData.length <= 8 && /^[A-Z0-9]+$/.test(cleanedData)) {
+      console.log('Valid QR Code detected:', cleanedData);
+      navigation.navigate('Home', { scannedData: cleanedData });
+    } else {
+      console.log('Invalid QR Code format:', cleanedData);
+      Alert.alert('Invalid QR Code', `The QR code contains: "${cleanedData}" which is not a valid session key. Session keys should be 4-8 alphanumeric characters.`);
+      resetScanner();
     }
   };
+  
+  const resetScanner = () => {
+    // Clear any existing timeout
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+    }
+    
+    // Reset scanning after a delay
+    scanTimeoutRef.current = setTimeout(() => {
+      setIsScanning(true);
+      lastScannedRef.current = null;
+    }, 2000);
+  };
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <View style={styles.container}>
       <RNCamera
         style={styles.preview}
-        onBarCodeRead={onBarCodeRead}
+        onBarCodeRead={isScanning ? onBarCodeRead : undefined}
         captureAudio={false}
         barCodeTypes={[RNCamera.Constants.BarCodeType.qr]}
       >
