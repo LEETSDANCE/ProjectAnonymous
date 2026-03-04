@@ -40,6 +40,13 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
 const SERVER_IP = 'https://3.110.215.75:3000';
 const SERVER_IP_WITH_CACHE = `${SERVER_IP}?t=${Date.now()}`;
 
+// Socket.IO configuration with self-signed certificate support
+const socketOptions = {
+  transports: ['polling', 'websocket'],
+  reconnection: true,
+  rejectUnauthorized: false, // Ignore self-signed certificate for development
+};
+
 interface ChatScreenProps {
   route: any;
   navigation: any;
@@ -90,6 +97,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
       reconnectionAttempts: 5,
       timeout: 20000,
       forceNew: true,
+      rejectUnauthorized: false, // Ignore self-signed certificate for development
     });
 
     newSocket.on('connect', () => {

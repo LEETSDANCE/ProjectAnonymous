@@ -1,7 +1,9 @@
 // server.js
 require('dotenv').config();
 const express = require('express');
-const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
 const { Server } = require('socket.io');
 const { Pool } = require('pg');
 const { randomUUID } = require('crypto');
@@ -21,7 +23,30 @@ const {
 } = require('./quantum-crypto-server');
 
 const app = express();
-const server = http.createServer(app);
+
+// SSL Certificate paths
+const certPath = path.join(__dirname, 'server.cert');
+const keyPath = path.join(__dirname, 'server.key');
+
+// Generate self-signed certificate if it doesn't exist
+if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+  console.log('🔐 Generating SSL certificate for HTTPS...');
+  try {
+    const { execSync } = require('child_process');
+    execSync(`openssl req -x509 -newkey rsa:4096 -keyout "${keyPath}" -out "${certPath}" -days 365 -nodes -subj "/C=US/ST=State/L=City/O=Organization/CN=3.110.215.75"`, { stdio: 'inherit' });
+    console.log('✅ SSL certificate generated successfully');
+  } catch (error) {
+    console.log('❌ Error generating SSL certificate:', error.message);
+    console.log('💡 Make sure OpenSSL is installed');
+    process.exit(1);
+  }
+}
+
+// Create HTTPS server
+const server = https.createServer({
+  key: fs.readFileSync(keyPath),
+  cert: fs.readFileSync(certPath)
+}, app);
 const users = {}; // Store { userId: publicKey }
 const rooms = {}; // Store { roomKey: { users: {}, messages: [], locked: false, createdAt: Date.now() } }
 const activeCalls = {}; // Store { roomKey: { callerId: string, receiverId: string, startTime: Date } }
@@ -545,10 +570,13 @@ io.on('connection', async (socket) => {
   });
 });
 
-// Start server
+// Start HTTPS server
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 server.listen(PORT, HOST, () => {
-  console.log(`Server running on ${HOST}:${PORT}`);
-  console.log(`Access from other devices: http://192.168.78.5:${PORT}`);
+  console.log(`🔐 HTTPS Server running on https://${HOST}:${PORT}`);
+  console.log(`📱 Access from mobile devices: https://3.110.215.75:${PORT}`);
+  console.log(`🌐 Access from web browser: https://localhost:${PORT}`);
+  console.log(`🔑 SSL Certificate: ${certPath}`);
+  console.log(`🔑 SSL Key: ${keyPath}`);
 });
