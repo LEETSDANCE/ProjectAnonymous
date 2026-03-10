@@ -139,7 +139,7 @@ export const encryptMessage = async (
   let signature: number[] | null = null;
   if (senderPrivateKey?.dsa) {
     const toSign = concat(kemCiphertext, new Uint8Array(iv), new Uint8Array(ciphertext));
-    signature = Array.from(DSA.sign(toSign, senderPrivateKey.dsa));
+    signature = Array.from(DSA.sign(senderPrivateKey.dsa, toSign));
   }
 
   return {
@@ -166,7 +166,7 @@ export const decryptMessage = async (
   if (encryptedData.signature && senderPublicKey?.dsa) {
     const toVerify = concat(kemCiphertext, iv, ciphertext);
     const sig = new Uint8Array(encryptedData.signature);
-    const valid = DSA.verify(toVerify, sig, senderPublicKey.dsa);
+    const valid = DSA.verify(senderPublicKey.dsa, toVerify, sig);
     if (!valid) throw new Error('⛔ ML-DSA signature verification failed — message rejected');
     console.log('✅ ML-DSA signature verified (mobile)');
   }
@@ -182,7 +182,7 @@ export const decryptMessage = async (
 
 export const signMessage = async (message: string, privateKey: any) => {
   const bytes = new Uint8Array(Buffer.from(message, 'utf8'));
-  const signature = DSA.sign(bytes, privateKey.dsa);
+  const signature = DSA.sign(privateKey.dsa, bytes);
   return { message, signature: Array.from(signature), algorithm: 'ML-DSA-87', timestamp: Date.now() };
 };
 
@@ -190,7 +190,7 @@ export const verifySignature = async (signedData: any, publicKey: any): Promise<
   try {
     const bytes = new Uint8Array(Buffer.from(signedData.message, 'utf8'));
     const sig   = new Uint8Array(signedData.signature);
-    const valid = DSA.verify(bytes, sig, publicKey.dsa);
+    const valid = DSA.verify(publicKey.dsa, bytes, sig);
     console.log(valid ? '✅ Signature verified (mobile)' : '❌ Signature invalid (mobile)');
     return valid;
   } catch { return false; }

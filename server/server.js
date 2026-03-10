@@ -380,32 +380,32 @@ io.on('connection', async (socket) => {
   socket.on('call-user', (data) => {
     console.log(`Call initiated in room ${data.roomKey} by ${data.username}`);
     
-    // Initialize call tracking
-    if (!activeCalls[data.roomKey]) {
-      const roomUsers = rooms[data.roomKey]?.users || {};
-      const otherUsers = Object.keys(roomUsers).filter(id => id !== userId);
+    const roomUsers = rooms[data.roomKey]?.users || {};
+    const otherUsers = Object.keys(roomUsers).filter(id => id !== userId);
+    
+    if (otherUsers.length > 0) {
+      const receiverId = otherUsers[0];
+      const receiverSocketId = roomUsers[receiverId].socketId;
       
-      if (otherUsers.length > 0) {
-        const receiverId = otherUsers[0];
-        const receiverSocketId = roomUsers[receiverId].socketId;
-        
-        // Track active call
+      // Track active call — idempotent (call-offer may have already created the entry)
+      if (!activeCalls[data.roomKey]) {
         activeCalls[data.roomKey] = {
           callerId: userId,
           receiverId: receiverId,
           startTime: Date.now()
         };
-        
-        // Send directly to specific user
-        io.to(receiverSocketId).emit('incoming-call', {
-          callType: data.callType,
-          callerName: data.username,
-          callerId: data.from,
-          callId: `call_${Date.now()}`
-        });
-        
-        console.log(`Call routed: ${userId} → ${receiverId}`);
       }
+      
+      // ALWAYS notify receiver — previously this was inside the !activeCalls guard
+      // which meant if call-offer arrived first the notification was never sent.
+      io.to(receiverSocketId).emit('incoming-call', {
+        callType: data.callType,
+        callerName: data.username,
+        callerId: data.from,
+        callId: `call_${Date.now()}`
+      });
+      
+      console.log(`Incoming-call sent: ${userId} → ${receiverId}`);
     }
   });
 
@@ -439,7 +439,8 @@ io.on('connection', async (socket) => {
           offer: data.offer,
           callType: data.callType,
           callerName: data.callerName,
-          from: userId
+          from: userId,
+          roomKey: data.roomKey  // ← receiver needs this to route the answer back
         });
         console.log(`Offer routed: ${userId} → ${targetId}`);
       } else {
