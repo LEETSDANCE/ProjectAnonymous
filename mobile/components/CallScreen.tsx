@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, PermissionsAndroid, Platform, Dimensions } from 'react-native';
 import { RTCView, RTCPeerConnection, RTCIceCandidate, RTCSessionDescription, mediaDevices } from 'react-native-webrtc';
-import { io, Socket } from 'socket.io-client';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// importPublicKey is available from quantum-crypto-native if needed for key exchange in future
+
 
 // Define MediaStreamConstraints interface
 interface MediaStreamConstraints {
@@ -21,6 +21,7 @@ interface CallScreenProps {
   onEndCall: () => void;
   isIncoming?: boolean;
   callType: 'audio' | 'video';
+  pendingOffer?: any; // buffered call-offer from ChatScreen
 }
 
 const { width, height } = Dimensions.get('window');
@@ -32,6 +33,7 @@ const CallScreen: React.FC<CallScreenProps> = ({
   onEndCall,
   isIncoming = false,
   callType,
+  pendingOffer,
 }) => {
   const [localStream, setLocalStream] = useState<any>(null);
   const [remoteStream, setRemoteStream] = useState<any>(null);
@@ -59,13 +61,18 @@ const [remoteStreamKey, setRemoteStreamKey] = useState<number>(0);
 
   const pcConfig = {
     iceServers: [
+      // STUN — discover public IP
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
-      {
-        urls: 'turn:openrelay.metered.ca:80',
-        username: 'openrelayproject',
-        credential: 'openrelayproject',
-      },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      // TURN — relay for symmetric NAT
+      { urls: 'turn:openrelay.metered.ca:80',   username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443',  username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turns:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:freestun.net:3478',          username: 'free', credential: 'free' },
+      { urls: 'turns:freestun.net:5349',         username: 'free', credential: 'free' },
     ],
   };
 
@@ -241,26 +248,6 @@ const [remoteStreamKey, setRemoteStreamKey] = useState<number>(0);
     }
   };
 
-  const importPublicKey = (publicKeyString: string) => {
-    try {
-      // Clean the public key string - remove any invalid characters
-      const cleanKeyString = publicKeyString.replace(/[^a-zA-Z0-9]/g, '');
-      const jsonString = Buffer.from(cleanKeyString, 'base64').toString('utf8');
-      const publicKeyData = JSON.parse(jsonString);
-      
-      return {
-        kem: new Uint8Array(publicKeyData.kem),
-        dsa: new Uint8Array(publicKeyData.dsa)
-      };
-    } catch (error) {
-      console.error('Error importing quantum public key:', error);
-      // Return fallback keys if import fails
-      return {
-        kem: new Uint8Array(32),
-        dsa: new Uint8Array(32)
-      };
-    }
-  };
 
   const initializePeerConnection = async () => {
     if (!peerConnection.current) return;
@@ -501,26 +488,24 @@ const [remoteStreamKey, setRemoteStreamKey] = useState<number>(0);
   };
 
   const setupSocketListeners = () => {
-    socket.on('call-offer', async (data: any) => {
-      try {
-        await peerConnection.current?.setRemoteDescription(
-          new RTCSessionDescription(data.offer)
-        );
-        
-        // Process any buffered ICE candidates
-        await processBufferedIceCandidates();
-        
-        const answer = await peerConnection.current?.createAnswer();
-        await peerConnection.current?.setLocalDescription(answer);
-        
-        socket.emit('call-answer', {
-          roomKey,
-          answer,
-        });
-      } catch (error) {
-        console.error('Error handling call offer:', error);
-      }
-    });
+    // Only register call-offer listener if we don't already have a buffered offer.
+    // When pendingOffer is set, the offer is processed directly in initializeCall — 
+    // registering a listener too would cause double-processing.
+    if (!pendingOffer) {
+      socket.on('call-offer', async (data: any) => {
+        try {
+          await peerConnection.current?.setRemoteDescription(
+            new RTCSessionDescription(data.offer)
+          );
+          await processBufferedIceCandidates();
+          const answer = await peerConnection.current?.createAnswer();
+          await peerConnection.current?.setLocalDescription(answer);
+          socket.emit('call-answer', { roomKey, answer });
+        } catch (error) {
+          console.error('Error handling call offer:', error);
+        }
+      });
+    }
 
     socket.on('call-answer', async (data: any) => {
       try {
@@ -633,15 +618,33 @@ const [remoteStreamKey, setRemoteStreamKey] = useState<number>(0);
   useEffect(() => {
     if (!socket) return;
 
-    // CRITICAL: Set up socket listeners BEFORE initializing call
+    // Set up socket listeners BEFORE initializing call
     setupSocketListeners();
     
-    // Then initialize the call
     if (isIncoming) {
       console.log('📞 Setting up incoming call');
-      setTimeout(() => {
-        initializeCall();
-      }, 100);
+      // Use pendingOffer if already buffered by ChatScreen
+      if (pendingOffer) {
+        console.log('📦 Processing pre-buffered call-offer immediately');
+        initializeCall().then(() => {
+          // Manually trigger the offer handler with the buffered offer
+          peerConnection.current && (async () => {
+            try {
+              await peerConnection.current!.setRemoteDescription(
+                new RTCSessionDescription(pendingOffer.offer)
+              );
+              await processBufferedIceCandidates();
+              const answer = await peerConnection.current!.createAnswer();
+              await peerConnection.current!.setLocalDescription(answer);
+              socket.emit('call-answer', { roomKey, answer });
+              console.log('✅ Answer sent from buffered offer');
+            } catch (e) { console.error('Error processing buffered offer:', e); }
+          })();
+        });
+      } else {
+        // Wait for call-offer via socket (registered in setupSocketListeners)
+        setTimeout(() => initializeCall(), 100);
+      }
     } else {
       console.log('📞 Setting up outgoing call');
       initializeCall();

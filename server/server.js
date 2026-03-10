@@ -54,6 +54,16 @@ if (USE_DATABASE) {
 
 // Middleware
 app.use(express.json());
+
+// CORS for REST endpoints (Socket.IO handles its own CORS separately)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 app.use(quantumCryptoMiddleware); // Add quantum security headers
 
 // Routes
@@ -249,7 +259,6 @@ io.on('connection', async (socket) => {
     io.to(currentRoomKey).emit('chat message', { ...messageData, from: userId });
   });
 
-  // Handle plain text messages (for testing)
   socket.on('chat message plain', async (msg) => {
     if (!currentRoomKey) {
       console.error('User tried to send message without joining a room');
@@ -258,40 +267,22 @@ io.on('connection', async (socket) => {
     
     console.log('Received plain text message:', msg);
     
-    // Check if this is a file message and preserve all fields
+    // Preserve ALL fields from the original message (type, file data, etc.)
     const messageData = {
-      text: msg.text,
+      ...msg,
       from: userId,
       username: currentUsername,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
     
-    // Add file-specific fields if they exist in the original message
-    if (msg.fileName) {
-      messageData.type = 'file';
-      messageData.fileName = msg.fileName;
-    }
-    if (msg.fileSize) {
-      messageData.fileSize = msg.fileSize;
-    }
-    if (msg.fileType) {
-      messageData.fileType = msg.fileType;
-    }
-    if (msg.fileData) {
-      messageData.fileData = msg.fileData;
-    }
-    
-    // Store message in room
+    // Store and broadcast
     if (rooms[currentRoomKey]) {
       rooms[currentRoomKey].messages.push(messageData);
-      
-      // Keep only last 100 messages per room
       if (rooms[currentRoomKey].messages.length > 100) {
         rooms[currentRoomKey].messages.shift();
       }
     }
     
-    // Broadcast to all users in the room
     io.to(currentRoomKey).emit('chat message plain', messageData);
   });
 
@@ -422,9 +413,24 @@ io.on('connection', async (socket) => {
   socket.on('call-offer', (data) => {
     console.log('Call offer received for room:', data.roomKey);
     
+    // If call-user hasn't arrived yet, create the activeCalls entry now
+    // (call-offer can arrive before call-user due to event ordering)
+    if (!activeCalls[data.roomKey]) {
+      const roomUsers = rooms[data.roomKey]?.users || {};
+      const otherUsers = Object.keys(roomUsers).filter(id => id !== userId);
+      if (otherUsers.length > 0) {
+        const receiverId = otherUsers[0];
+        activeCalls[data.roomKey] = {
+          callerId: userId,
+          receiverId,
+          startTime: Date.now()
+        };
+        console.log(`activeCalls created by call-offer: ${userId} → ${receiverId}`);
+      }
+    }
+
     const call = activeCalls[data.roomKey];
     if (call) {
-      // Route offer to the other participant only
       const targetId = call.callerId === userId ? call.receiverId : call.callerId;
       const targetSocketId = rooms[data.roomKey]?.users?.[targetId]?.socketId;
       
@@ -436,7 +442,11 @@ io.on('connection', async (socket) => {
           from: userId
         });
         console.log(`Offer routed: ${userId} → ${targetId}`);
+      } else {
+        console.warn(`call-offer: no socket found for target ${targetId}`);
       }
+    } else {
+      console.warn('call-offer: no activeCalls entry and no other users found');
     }
   });
 

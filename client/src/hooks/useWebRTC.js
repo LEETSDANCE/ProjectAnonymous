@@ -2,10 +2,19 @@ import { useState, useRef, useEffect } from 'react';
 
 const ICE_SERVERS = {
   iceServers: [
+    // STUN — discover public IP
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    // TURN — relay for symmetric NAT (openrelay)
+    { urls: 'turn:openrelay.metered.ca:80',  username: 'openrelayproject', credential: 'openrelayproject' },
     { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turns:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    // TURN — freestun (no account needed)
+    { urls: 'turn:freestun.net:3478',  username: 'free', credential: 'free' },
+    { urls: 'turns:freestun.net:5349', username: 'free', credential: 'free' },
   ],
 };
 
@@ -17,6 +26,8 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [incomingCall, setIncomingCall] = useState(null);
 
   const peerConnectionRef = useRef(null);
   const pendingOfferRef = useRef(null);
@@ -62,85 +73,63 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
     const pc = new RTCPeerConnection(ICE_SERVERS);
 
     pc.onicecandidate = ({ candidate }) => {
-      if (candidate) emitWebRTC('ice-candidate', { roomKey, candidate });
+      if (candidate) {
+        console.log('📡 Sending ICE candidate:', candidate.type, candidate.protocol, candidate.address);
+        emitWebRTC('ice-candidate', { roomKey, candidate });
+      } else {
+        console.log('✅ ICE gathering complete');
+      }
     };
 
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
-      console.log('🔗 WebRTC state:', state);
-      if (state === 'failed') {
+      console.log('🔗 WebRTC connection state:', state);
+      if (state === 'connected') {
+        console.log('✅ Peers connected! Media should be flowing.');
+      } else if (state === 'failed') {
+        console.error('❌ WebRTC connection FAILED — ICE could not find a path between peers.');
+        alert('Call connection failed. This may be due to a firewall or NAT. Please try again.');
         setCallInProgress(false);
         setIsInCall(false);
+        setRemoteStream(null);
       } else if (state === 'disconnected') {
         setTimeout(() => {
           if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
             setCallInProgress(false);
             setIsInCall(false);
+            setRemoteStream(null);
           }
         }, 3000);
       }
     };
 
+    pc.onicegatheringstatechange = () => {
+      console.log('🧊 ICE gathering state:', pc.iceGatheringState);
+    };
+
     pc.oniceconnectionstatechange = () => {
-      console.log('🧊 ICE state:', pc.iceConnectionState);
+      console.log('🔀 ICE connection state:', pc.iceConnectionState);
+    };
+
+    pc.ontrack = ({ streams, track }) => {
+      console.log('🎵 ontrack fired — track kind:', track.kind, '| streams:', streams.length);
     };
 
     return pc;
   };
 
-  const attachRemoteStream = (stream, callType) => {
-    let audio = document.getElementById('remoteAudio');
-    if (!audio) {
-      audio = document.createElement('audio');
-      audio.id = 'remoteAudio';
-      audio.autoplay = true;
-      audio.style.display = 'none';
-      document.body.appendChild(audio);
-    }
-    audio.srcObject = stream;
-    audio.muted = false;
-    audio.play().catch(() => {});
-
-    if (callType === 'video') {
-      let video = document.getElementById('remoteVideo');
-      if (!video) {
-        video = document.createElement('video');
-        video.id = 'remoteVideo';
-        video.autoplay = true;
-        video.style.cssText = 'width:100%;height:100%;object-fit:contain;background:#000';
-        const placeholder = document.querySelector('.remote-video-placeholder');
-        if (placeholder) { placeholder.innerHTML = ''; placeholder.appendChild(video); }
-      }
-      video.srcObject = stream;
-      video.play().catch(() => {});
-    }
+  // Store remote stream in state so React renders the media elements
+  const attachRemoteStream = (stream) => {
+    setRemoteStream(stream);
   };
 
-  const attachLocalStream = (stream) => {
-    setTimeout(() => {
-      let video = document.getElementById('localVideo');
-      if (!video) {
-        video = document.createElement('video');
-        video.id = 'localVideo';
-        video.autoplay = true;
-        video.muted = true;
-        video.style.cssText = 'width:100%;height:100%;object-fit:cover;transform:scaleX(-1)';
-        const placeholder = document.querySelector('.local-video-placeholder');
-        if (placeholder) { placeholder.innerHTML = ''; placeholder.appendChild(video); }
-      }
-      video.srcObject = stream;
-    }, 1000);
+  // Store local stream (already in state — just expose srcObject to video element)
+  const attachLocalStream = (_stream) => {
+    // localStream state is already set; CallOverlay reads it via props
   };
 
   const cleanupCallElements = () => {
-    ['remoteAudio', 'remoteVideo', 'localVideo'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) { el.srcObject = null; el.remove?.(); }
-    });
-    ['.remote-video-placeholder', '.local-video-placeholder'].forEach(sel => {
-      const el = document.querySelector(sel);
-      if (el) el.innerHTML = '';
-    });
+    setRemoteStream(null);
   };
 
   const processPendingSignaling = async (roomKey) => {
@@ -165,40 +154,55 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
     pendingIceCandidatesRef.current = [];
   };
 
-  // ── Incoming call handler (called by useSocket callback) ─────────────────
-  const handleIncomingCall = async (data, roomKey) => {
-    if (callInProgress) return;
+  // ── Incoming call: Phase 1 — store pending call, show UI (no confirm!) ─────
+  const handleIncomingCall = (data, roomKey) => {
+    if (callInProgress) return; // ignore if already in a call
+    setIncomingCall({
+      callerName: data.callerName,
+      callType: data.callType,
+      callId: data.callId,
+      roomKey,
+    });
+  };
 
-    const callTypeLabel = data.callType === 'audio' ? 'Voice' : 'Video';
-    const accept = window.confirm(`🔔 Incoming ${callTypeLabel} call from ${data.callerName}. Accept?`);
-
-    if (!accept) {
-      emitWebRTC('reject-call', { roomKey, callId: data.callId });
-      return;
-    }
-
+  // ── Incoming call: Phase 2a — user clicked Accept button (user gesture!) ───
+  const acceptCall = async () => {
+    if (!incomingCall) return;
+    const { callType, callId, roomKey } = incomingCall;
+    setIncomingCall(null);
     setCallInProgress(true);
     setIsInCall(true);
-    setCurrentCallType(data.callType);
+    setCurrentCallType(callType);
 
     try {
-      const stream = await getMediaStream(data.callType);
+      const stream = await getMediaStream(callType);
       setLocalStream(stream);
-      if (data.callType === 'video') attachLocalStream(stream);
+      if (callType === 'video') attachLocalStream(stream);
 
       const pc = createPeerConnection(roomKey);
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
-      pc.ontrack = ({ streams }) => { if (streams?.[0]) attachRemoteStream(streams[0], data.callType); };
+      pc.ontrack = ({ streams }) => { if (streams?.[0]) attachRemoteStream(streams[0]); };
       peerConnectionRef.current = pc;
 
       await processPendingSignaling(roomKey);
-      emitWebRTC('accept-call', { roomKey, callId: data.callId });
+      emitWebRTC('accept-call', { roomKey, callId });
     } catch (err) {
       console.error('Accept call error:', err);
-      alert('Failed to accept call. Check camera/mic permissions.');
+      if (err.name === 'NotAllowedError') {
+        alert('Camera/microphone permission was denied. Please allow access in your browser settings and try again.');
+      } else {
+        alert('Failed to accept call. Please check your camera and microphone.');
+      }
       setCallInProgress(false);
       setIsInCall(false);
     }
+  };
+
+  // ── Incoming call: Phase 2b — user clicked Decline button ─────────────────
+  const declineCall = () => {
+    if (!incomingCall) return;
+    emitWebRTC('reject-call', { roomKey: incomingCall.roomKey, callId: incomingCall.callId });
+    setIncomingCall(null);
   };
 
   // ── Outgoing call ─────────────────────────────────────────────────────────
@@ -217,7 +221,7 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
 
       const pc = createPeerConnection(roomKey);
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
-      pc.ontrack = ({ streams }) => { if (streams?.[0]) attachRemoteStream(streams[0], callType); };
+      pc.ontrack = ({ streams }) => { if (streams?.[0]) attachRemoteStream(streams[0]); };
       peerConnectionRef.current = pc;
 
       const offer = await pc.createOffer();
@@ -322,10 +326,15 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
     callDuration,
     isMuted,
     isVideoOff,
+    localStream,
+    remoteStream,
+    incomingCall,
     formatCallDuration,
     startCall,
     endCall,
     handleIncomingCall,
+    acceptCall,
+    declineCall,
     handleCallOffer,
     handleCallAnswer,
     handleIceCandidate,

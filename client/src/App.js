@@ -17,10 +17,11 @@ import { MessageList }  from './components/MessageList';
 import { CallOverlay }  from './components/CallOverlay';
 
 // Modals
-import { WelcomeModal }  from './components/modals/WelcomeModal';
-import { QRCodeModal }   from './components/modals/QRCodeModal';
-import { SecurityModal } from './components/modals/SecurityModal';
-import { UserListModal } from './components/modals/UserListModal';
+import { WelcomeModal }      from './components/modals/WelcomeModal';
+import { QRCodeModal }       from './components/modals/QRCodeModal';
+import { SecurityModal }     from './components/modals/SecurityModal';
+import { UserListModal }     from './components/modals/UserListModal';
+import { IncomingCallModal } from './components/modals/IncomingCallModal';
 
 function App() {
   const [currentView, setCurrentView] = useState('home');
@@ -54,7 +55,10 @@ function App() {
   const {
     isInCall, callInProgress, currentCallType, callDuration,
     isMuted, isVideoOff,
+    localStream, remoteStream,
+    incomingCall,
     formatCallDuration, startCall, endCall,
+    acceptCall, declineCall,
     handleIncomingCall, handleCallOffer, handleCallAnswer,
     handleIceCandidate, handleCallEnded,
     toggleMute, toggleVideo,
@@ -102,12 +106,14 @@ function App() {
       key: generatedKey,
       name: username.trim(),
       isCreator: true,
+      decryptMessage,
       onIncomingCall: (data) => handleIncomingCall(data, generatedKey),
       onCallOffer: handleCallOffer,
       onCallAnswer: handleCallAnswer,
       onIceCandidate: handleIceCandidate,
       onCallEnded: handleCallEnded,
     });
+    setRoomKey(generatedKey); // ← sync App state so header and file share see the key
     setCurrentView('chat');
   };
 
@@ -123,6 +129,7 @@ function App() {
       key,
       name: username.trim(),
       isCreator: false,
+      decryptMessage,
       onIncomingCall: (data) => handleIncomingCall(data, key),
       onCallOffer: handleCallOffer,
       onCallAnswer: handleCallAnswer,
@@ -132,28 +139,23 @@ function App() {
     setCurrentView('chat');
   };
 
-  const handleJoinViaUrl = async (roomCode) => {
+  const handleJoinViaUrl = (roomCode) => {
     const err = validateUsername(username);
     if (err) { setUsernameError(err); return; }
-    try {
-      const res = await fetch(`https://maxyserver.servehalflife.com/room/${roomCode}`, {
-        mode: 'cors', credentials: 'omit',
-      });
-      const data = await res.json();
-      if (data.success) {
-        localStorage.setItem('username', username.trim());
-        addToRecentRooms(roomCode);
-        joinRoom({
-          key: roomCode, name: username.trim(), isCreator: false,
-          onIncomingCall: (d) => handleIncomingCall(d, roomCode),
-          onCallOffer: handleCallOffer, onCallAnswer: handleCallAnswer,
-          onIceCandidate: handleIceCandidate, onCallEnded: handleCallEnded,
-        });
-        setCurrentView('chat');
-      }
-    } catch (err) {
-      alert('Failed to join room via URL');
-    }
+    if (!roomCode) { alert('No room code provided.'); return; }
+    if (!keys) { alert('Quantum encryption keys are still loading. Please wait.'); return; }
+    const key = roomCode.toUpperCase();
+    localStorage.setItem('username', username.trim());
+    addToRecentRooms(key);
+    joinRoom({
+      key, name: username.trim(), isCreator: false,
+      decryptMessage,
+      onIncomingCall: (d) => handleIncomingCall(d, key),
+      onCallOffer: handleCallOffer, onCallAnswer: handleCallAnswer,
+      onIceCandidate: handleIceCandidate, onCallEnded: handleCallEnded,
+    });
+    setRoomKey(key);
+    setCurrentView('chat');
   };
 
   const handleLeaveRoom = () => {
@@ -163,9 +165,9 @@ function App() {
     setGeneratedKey('');
   };
 
-  const handleSendMessage = (e) => {
+  const handleSendMessage = async (e) => {
     e.preventDefault();
-    const sent = sendMessage({ message, userId, username, keys, userPublicKeys, encryptMessage });
+    const sent = await sendMessage({ message, userId, username, keys, userPublicKeys, encryptMessage });
     if (sent) setMessage('');
   };
 
@@ -258,10 +260,20 @@ function App() {
           currentCallType={currentCallType} callDuration={callDuration}
           callInProgress={callInProgress} roomKey={roomKey}
           isMuted={isMuted} isVideoOff={isVideoOff}
+          localStream={localStream} remoteStream={remoteStream}
           formatCallDuration={formatCallDuration}
           onEndCall={handleEndCall}
           onToggleMute={toggleMute}
           onToggleVideo={toggleVideo}
+        />
+      )}
+
+      {incomingCall && (
+        <IncomingCallModal
+          callerName={incomingCall.callerName}
+          callType={incomingCall.callType}
+          onAccept={acceptCall}
+          onDecline={declineCall}
         />
       )}
 

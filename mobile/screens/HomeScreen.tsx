@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+// react-native-get-random-values polyfills global.crypto — imported in index.js entry point
+
 import {
   View,
   Text,
@@ -34,8 +36,12 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, route }) => {
   const [showQR, setShowQR] = useState(false);
 
   const generateSessionKey = () => {
-    // Generate a random 6-character session key
-    const key = Math.random().toString(36).substring(2, 8).toUpperCase();
+    // Secure random 6-char key — relies on polyfill registered in index.js
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const bytes = new Uint8Array(6);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).crypto.getRandomValues(bytes);
+    const key = Array.from(bytes).map(b => chars[b % chars.length]).join('');
     setGeneratedKey(key);
   };
 
