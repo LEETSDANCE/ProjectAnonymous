@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 // Self-hosted coturn on the project's AWS EC2 instance.
 // See server setup instructions — install coturn, open ports 3478/5349 + 49152-65535 UDP in EC2 Security Group.
 // Replace YOUR_EC2_PUBLIC_IP and TURN_PASSWORD with the values in /etc/turnserver.conf on the EC2 box.
-const TURN_HOST = '13.127.197.229'; // EC2 public IP — no DNS needed, bypasses subdomain resolution issues
+const TURN_HOST = '15.206.79.158'; // EC2 public IP — no DNS needed, bypasses subdomain resolution issues
 const TURN_USER = 'projectanonymous';
 const TURN_PASS = 'F,7ld@coturn'; // ← set this after configuring coturn
 
@@ -317,7 +317,7 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
         await peerConnectionRef.current.setRemoteDescription(data.offer);
         // Drain buffered ICE candidates now that remote description is set
         for (const c of pendingIceCandidatesRef.current) {
-          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch (_) { }
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch (_) {}
         }
         pendingIceCandidatesRef.current = [];
         const answer = await peerConnectionRef.current.createAnswer();
@@ -337,7 +337,7 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
       const pc = peerConnectionRef.current;
       if (pc) {
         for (const c of pendingIceCandidatesRef.current) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_) { }
+          try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_) {}
         }
         pendingIceCandidatesRef.current = [];
       }

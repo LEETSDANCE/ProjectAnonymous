@@ -59,20 +59,21 @@ const [remoteStreamKey, setRemoteStreamKey] = useState<number>(0);
   const MAX_RECONNECT_ATTEMPTS = 3;
   const QUALITY_MONITOR_INTERVAL = 5000; // 5 seconds
 
+  const TURN_HOST = '15.206.79.158';
+  const TURN_USER = 'projectanonymous';
+  const TURN_PASS = 'F,7ld@coturn';
+
   const pcConfig = {
     iceServers: [
       // STUN — discover public IP
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun3.l.google.com:19302' },
-      { urls: 'stun:stun4.l.google.com:19302' },
-      // TURN — relay for symmetric NAT
-      { urls: 'turn:openrelay.metered.ca:80',   username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443',  username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turns:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:freestun.net:3478',          username: 'free', credential: 'free' },
-      { urls: 'turns:freestun.net:5349',         username: 'free', credential: 'free' },
+      // TURN over UDP — fastest relay path
+      { urls: `turn:${TURN_HOST}:3478`, username: TURN_USER, credential: TURN_PASS },
+      // TURN over TCP — fallback for networks that block UDP
+      { urls: `turn:${TURN_HOST}:3478?transport=tcp`, username: TURN_USER, credential: TURN_PASS },
+      // TURNS (TURN over TLS) — fallback for deep-packet-inspection firewalls
+      { urls: `turns:${TURN_HOST}:5349`, username: TURN_USER, credential: TURN_PASS },
     ],
   };
 
