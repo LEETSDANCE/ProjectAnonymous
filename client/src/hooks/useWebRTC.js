@@ -317,7 +317,7 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
         await peerConnectionRef.current.setRemoteDescription(data.offer);
         // Drain buffered ICE candidates now that remote description is set
         for (const c of pendingIceCandidatesRef.current) {
-          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch (_) {}
+          try { await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch (_) { }
         }
         pendingIceCandidatesRef.current = [];
         const answer = await peerConnectionRef.current.createAnswer();
@@ -337,7 +337,7 @@ export function useWebRTC({ emitWebRTC, sendCallNotification }) {
       const pc = peerConnectionRef.current;
       if (pc) {
         for (const c of pendingIceCandidatesRef.current) {
-          try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_) {}
+          try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (_) { }
         }
         pendingIceCandidatesRef.current = [];
       }
